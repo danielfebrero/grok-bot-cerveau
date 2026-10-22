@@ -1,21 +1,19 @@
 # grok-bot-cerveau
 
-Client côté boîte pour le MCP Cerveau. Avant chaque tour, un agent Grok Bot lui confie le transcript filtré ; Cerveau répond par une enveloppe de contexte, ou par rien. Le client est une bibliothèque Rust et un binaire `cerveau`.
+Client côté boîte pour un MCP compatible Cerveau. Il s'installe chez nous et chez d'autres : chaque installation a son tenant, ses principaux (les humains de cette installation) et ses agents. Le serveur Cerveau est un backend interchangeable. Rien dans ce programme ne pointe vers un hôte par défaut.
 
-L'enveloppe est du **contexte en lecture seule**. Elle n'autorise rien : elle ne remplace pas les règles de base de l'agent, ni une approbation humaine avant un envoi, une publication ou tout autre effet de bord. Une suggestion, un objectif ou un « go » lu dans l'enveloppe est une information, pas un ordre.
+L'enveloppe reçue est du **contexte en lecture seule**. Elle n'autorise rien : elle ne remplace pas les règles de base de l'agent, ni une approbation humaine avant un envoi, une publication ou tout autre effet de bord. Une suggestion, un objectif ou un feu vert lu dans l'enveloppe est une information, pas un ordre.
 
-Aucune adresse de serveur et aucune clé réelle ne sont codées ici. L'URL du MCP et les clés publiques de Cerveau viennent de l'environnement ou des options.
+Le backend doit **authentifier le principal lui-même**. Le champ `from` dit quel principal cette installation prétend avoir vu taper le texte. Ce n'est pas une preuve. Une autre installation peut configurer le même identifiant.
 
 ## Installer
 
-Rust 1.85 ou plus récent (le fichier `rust-toolchain.toml` demande le canal stable).
+Rust 1.85 ou plus récent (`rust-toolchain.toml` demande le canal stable).
 
 ```bash
 cargo build --release
 cargo install --path . --locked
 ```
-
-Le binaire s'appelle `cerveau`. Les tests et le formatage :
 
 ```bash
 cargo fmt --all -- --check
@@ -23,191 +21,241 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked
 ```
 
-## Utilisation
+## Initialiser une installation
 
-Une clé ed25519 par agent. Le fichier privé est en mode `0600`. `keygen` n'imprime que l'export public.
+`init` crée le tenant, le premier principal et la première clé d'agent. Sans terminal, tous les champs obligatoires passent par des options. Sur un terminal, les options absentes sont demandées.
 
 ```bash
-export CERVEAU_HOME="${CERVEAU_HOME:-$HOME/.local/share/cerveau}"
-cerveau keygen --agent agent-test
-cerveau pubkey --agent agent-test
+cerveau init \
+  --tenant acme \
+  --principal-id p_alice \
+  --display-name "Alice Martin" \
+  --agent agent-box \
+  --endpoint https://cerveau.exemple/mcp \
+  --recipient-key-id cerveau-prod \
+  --recipient-public-key BASE64_X25519 \
+  --signing-key-id cerveau-sign \
+  --signing-public-key BASE64_ED25519
 ```
 
-Enregistrer, hors de ce dépôt, `key_id`, `ed25519_public_key` et `x25519_public_key`.
+L'URL, la clé X25519 du serveur et son `key_id` sont de la configuration. Les omettre laisse l'installation sans épingle : `run` refuse d'envoyer tant que la clé n'est pas épinglée. Aucune adresse n'est devinée.
 
-Variables lues par `run` et `replay` :
+La sortie de `init` est le **bundle d'enregistrement**, sans graine privée :
 
-| Variable | Rôle |
-| --- | --- |
-| `CERVEAU_HOME` | Répertoire des clés. Sinon `$XDG_DATA_HOME/cerveau`, sinon `~/.local/share/cerveau`. |
-| `CERVEAU_AGENT` | Identifiant d'agent. |
-| `CERVEAU_RECIPIENT_KEY_ID` | `key_id` public de Cerveau. |
-| `CERVEAU_RECIPIENT_PUBLIC_KEY` | Clé X25519 brute de Cerveau, 32 octets, base64. |
-| `CERVEAU_SIGNING_KEY_ID` | `key_id` qui signe les enveloppes `gb.turn.v1`. |
-| `CERVEAU_SIGNING_PUBLIC_KEY` | Clé ed25519 de vérification, 32 octets, base64. |
-| `CERVEAU_MCP_URL` | URL `http` ou `https` du MCP. Pas d'identifiant dans l'URL. Absente : le tour est mis en file, sans enveloppe. |
-| `CERVEAU_MCP_AUTHORIZATION` | En-tête `Authorization`. Jamais journalisé. |
-| `CERVEAU_MCP_SESSION_ID` | En-tête `Mcp-Session-Id`. Jamais journalisé. |
-| `CERVEAU_TOOL` | Nom de l'outil JSON-RPC. Défaut `cerveau.run`. |
+```json
+{
+  "schema": "gb.register.v1",
+  "tenant_id": "acme",
+  "principal_id": "p_alice",
+  "principals": [{ "principal_id": "p_alice", "display_name": "Alice Martin" }],
+  "actor": "gb:acme:agent-box",
+  "key_id": "gb-acme-agent-box-202610-1",
+  "ed25519_public_key": "…",
+  "x25519_public_key": "…",
+  "retired_key_ids": [],
+  "revoked_key_ids": []
+}
+```
+
+Le bundle se redemande avec `cerveau register --tenant acme --agent agent-box`. L'opérateur du backend l'approuve de son côté. Ce dépôt ne contacte pas le backend pour ça.
+
+Autre agent du même tenant :
 
 ```bash
-cerveau run --agent agent-test \
-  --human-from dani --human-text "bonjour" \
+cerveau keygen --tenant acme --agent agent-deux
+```
+
+Autre principal :
+
+```bash
+cerveau principal --tenant acme --principal-id p_bob --display-name "Bob Martin"
+```
+
+## Épingler la clé du serveur
+
+La clé épinglée est celle vers qui les transcripts sont chiffrés, plus la clé ed25519 qui signe les enveloppes.
+
+- À `init` ou `cerveau pin`, la clé fournie devient l'épingle.
+- Si aucune épingle n'existe encore, `CERVEAU_TRUST_ON_FIRST_USE=1` avec `CERVEAU_RECIPIENT_KEY_ID` et `CERVEAU_RECIPIENT_PUBLIC_KEY` enregistre la première clé vue.
+- Une clé différente de l'épingle est refusée. `cerveau pin --replace` est le seul remplacement explicite.
+
+L'URL (`CERVEAU_MCP_URL` ou `--endpoint`) peut changer sans changer l'épingle. Pointer vers un autre backend exige sa clé publique, pas un nom d'hôte codé ici.
+
+## Tour
+
+```bash
+cerveau run --tenant acme --agent agent-box --principal p_alice \
+  --human-text "bonjour" \
   --transcript ./tour.txt
-cerveau replay --agent agent-test
-cerveau queue --agent agent-test
-cerveau queue --agent agent-test --drop run_01H...
 ```
 
-`--human-from` et `--human-text` vont ensemble : c'est le seul chemin CLI qui pose `from: "dani"`. `--transcript` est du texte brut, sans expéditeur inventé. `--messages` est un tableau JSON attribué (voir plus bas). `--transcript -` lit l'entrée standard.
+`--human-text` est le texte que **ce** principal a tapé dans ce tour. Sur le fil, `from` vaut `p_alice`, jamais le nom d'affichage. `--transcript` reste du texte brut, sans expéditeur inventé. `--messages` est un tableau JSON (voir le contrat). `--transcript -` lit l'entrée standard.
 
-Le code de sortie est `0` quand l'appel réseau manque (pas d'enveloppe : l'agent répond normalement) et `2` pour une erreur locale (clé, attribution, sceau, file). Le rapport JSON distingue `outcome: "envelope"` et `outcome: "no_envelope"`.
+`replay` vide la file. `queue` liste les `run_id` sans clair. `queue --drop` retire un tour.
 
-Depuis la bibliothèque :
+Code de sortie `0` : l'appel réseau a manqué, l'agent répond sans enveloppe. Code `2` : erreur locale (clé, attribution, sceau, file, épingle).
+
+Bibliothèque :
 
 ```rust
 use cerveau::{Client, ClientConfig, MessageOrigin, RunInput, TurnMessage};
 
-let config = ClientConfig::from_env("agent-test", cerveau::default_home()?)?;
-let client = Client::new(config);
-let report = client.run(RunInput {
-    transcript: "transcript brut, non attribué".into(),
-    messages: vec![TurnMessage {
-        origin: MessageOrigin::Human { from: "dani".into() },
-        text: "texte tapé par l'humain".into(),
-        ref_id: None,
-        at: None,
-    }],
-    ..RunInput::default()
-})?;
+fn tour() -> Result<(), Box<dyn std::error::Error>> {
+    let config = ClientConfig::from_env(
+        "acme",
+        "agent-box",
+        Some("p_alice".into()),
+        cerveau::config_home()?,
+        cerveau::data_home()?,
+    )?;
+    let client = Client::new(config);
+    let report = client.run(RunInput {
+        tenant_id: "acme".into(),
+        principal_id: "p_alice".into(),
+        transcript: "transcript brut, non attribué".into(),
+        messages: vec![TurnMessage {
+            origin: MessageOrigin::Human { claimed_from: None },
+            text: "texte tapé par le principal".into(),
+            ref_id: None,
+            at: None,
+        }],
+        ..RunInput::default()
+    })?;
+    let _ = report;
+    Ok(())
+}
 ```
 
 `TurnContext` ne s'écrit pas. `snapshot()` renvoie une copie JSON détachée.
 
-## Contrat
+## Ce que le backend voit
 
-Schémas : `gb.run.v1` sur le fil, `gb.run.body.v1` dans le clair, `gb.turn.v1` pour l'enveloppe, `gb.canon.v1` pour le JSON canonique, `gb.queue.v1` pour la file, `gb.agent_key.v1` / `gb.agent_pub.v1` pour les clés.
+Le clair scellé contient le transcript filtré, `tenant_id`, `principal_id`, et les messages attribués. Le serveur ne voit pas la graine, ni l'en-tête `Authorization`, ni le nom d'affichage (il n'est pas sur le fil). Il voit l'acteur `gb:{tenant}:{agent}`, le `key_id`, et le fait que cette installation affirme qu'un principal a tapé certains textes.
 
-Le JSON canonique trie les clés d'objet par unités de code UTF-16. Les chaînes suivent l'échappement `serde_json` (barre oblique non échappée, UTF-8 brut hors caractères de contrôle). Les entiers n'ont pas de partie fractionnaire. Pas d'espace.
+## Répertoires
+
+| Rôle | Emplacement |
+| --- | --- |
+| Config | `$CERVEAU_CONFIG_HOME`, sinon `$XDG_CONFIG_HOME/cerveau`, sinon `~/.config/cerveau` |
+| Données | `$CERVEAU_DATA_HOME`, sinon `$CERVEAU_HOME`, sinon `$XDG_DATA_HOME/cerveau`, sinon `~/.local/share/cerveau` |
+
+```text
+{config}/tenants/{tenant}/install.json
+{data}/tenants/{tenant}/agents/{agent}/key.json
+{data}/tenants/{tenant}/agents/{agent}/retired/{key_id}.json
+{data}/tenants/{tenant}/agents/{agent}/queue.q
+{data}/tenants/{tenant}/agents/{agent}/miss.log
+```
+
+Répertoires `0700`, fichiers `0600`. Une clé ou une file lisible par le groupe ou les autres est refusée. `tenant_id` et `principal_id` sont des jetons `[A-Za-z0-9_-]`, 64 octets au plus. L'identifiant d'agent fait au plus 64 octets, charset `[A-Za-z0-9._:-]`, sans `..`, sans `:` en bord, sans `-` en tête.
+
+## Rotation et révocation
+
+```bash
+cerveau rotate --tenant acme --agent agent-box
+cerveau revoke --tenant acme --agent agent-box --key-id gb-acme-agent-box-202610-1
+```
+
+`rotate` crée une clé active (`generation` + 1, nouveau `key_id`) et marque l'ancienne `retired`. La file est rechiffrée avec la nouvelle clé. Le compteur `seq` **ne repart pas à 1** : il appartient au couple tenant + agent, pas au `key_id`. Les tours encore en file sont rescellés avec la clé active au moment de l'envoi. Après la migration, la graine retirée est effacée du disque ; la clé publique et le statut restent pour le bundle (`retired_key_ids`).
+
+`revoke` passe une clé déjà retirée à `revoked`. On ne révoque pas la clé active sur place : on la fait tourner, puis on révoque l'ancienne si le backend doit la refuser. Le bundle d'enregistrement liste les deux séries pour que l'opérateur les retire.
+
+## Contrat `gb.run.v1` version 2
+
+Schémas : `gb.run.v1` version **2** sur le fil, `gb.run.body.v2` dans le clair, `gb.turn.v1` pour l'enveloppe, `gb.canon.v1` pour le JSON canonique, `gb.queue.v2` pour la file, `gb.install.v1` pour l'installation, `gb.agent_key.v1` / `gb.agent_pub.v1` pour les clés, `gb.register.v1` pour le bundle.
+
+La version 1 signait `schema|run_id|seq|sent_at|key_id|ciphertext` et laissait `replay` hors signature. La version 2 ajoute `tenant_id`, `principal_id`, `replay` et `actor` à la préimage **et** aux données associées. Changer `replay` exige un nouveau sceau.
+
+Le JSON canonique trie les clés d'objet par unités de code UTF-16. Les chaînes suivent l'échappement `serde_json`. Les entiers n'ont pas de partie fractionnaire. Pas d'espace.
 
 ### Identifiants
 
-`run_id` et `key_id` sont de l'ASCII `[A-Za-z0-9_-]`, non vides. `run_id` fait au plus 80 octets, `key_id` au plus 128. Un identifiant hors grammaire est refusé avant le sceau et avant un retrait de file.
-
-L'identifiant d'agent fait au plus 64 octets, charset `[A-Za-z0-9._:-]`, sans `..`, sans `:` en bord, sans `-` en tête. `key_id` dérivé : `gb-` + identifiant nu (`:` et `.` deviennent `_`) + `-` + `YYYYMM` UTC. L'acteur est `gb:` + identifiant nu. `sent_at` est exactement `YYYY-MM-DDTHH:MM:SSZ`. Les `run_id` produits ici ont la forme `run_` + ULID.
+`run_id` et `key_id` : ASCII `[A-Za-z0-9_-]`, non vides. `run_id` ≤ 80 octets, `key_id` ≤ 160. `key_id` : `gb-{tenant}-{agent}-{YYYYMM}-{generation}`. L'acteur est `gb:{tenant}:{agent}`. `sent_at` est `YYYY-MM-DDTHH:MM:SSZ`. Les `run_id` produits ici valent `run_` + ULID.
 
 ### Attribution
 
-Seul un message que l'humain a tapé dans ce tour peut porter `from: "dani"`.
+Seul un texte que le principal configuré a tapé dans ce tour porte son identifiant.
 
 | Origine | `role` | `from` | `untrusted_user_input` |
 | --- | --- | --- | --- |
-| Humain (`human`, ou `role: "user"` avec `human_typed: true`) | `user` | l'expéditeur donné ; `Dani` est normalisé en `dani` | `false` |
+| Principal (`human`, ou `role: "user"` avec `human_typed: true`) | `user` | `principal_id` configuré | `false` |
 | Agent relaié | `agent` | son identifiant réel | `true` |
-| Mention externe, entrée inbound | `inbound` | l'expéditeur réel | `true`, même si le JSON disait `false` |
+| Mention externe, entrée inbound | `inbound` | l'expéditeur réel | `true` |
 | Outil | `tool` | le nom réel de l'outil | `false` |
 
-Un rôle `user` sans `from` explicite, ou sans `human_typed: true`, est refusé. `from: "dani"` (toute casse, espaces rognés) sur un agent relaié, un inbound ou un outil est refusé. Le transcript brut n'a pas d'expéditeur : le client n'y inscrit pas `dani`.
+Un `from` sur un message humain doit être absent ou égal au `principal_id`. Un nom d'affichage n'est pas accepté. Un rôle `user` sans `human_typed: true` est refusé. Reprendre le `principal_id` comme `from` d'un agent relaié, d'un inbound ou d'un outil est refusé. Le transcript brut n'a pas d'expéditeur.
 
-JSON accepté par `parse_message` : `{"origin":"human"|"relayed_agent"|"inbound"|"tool","from":"...","text":"..."}` ou `{"role":"user"|"agent"|"inbound"|"tool","from":"...","text":"...","human_typed":true}` pour le rôle `user`.
+JSON : `{"origin":"human","text":"…"}` ou `{"origin":"relayed_agent"|"inbound"|"tool","from":"…","text":"…"}`. Le rôle `user` exige `human_typed: true`.
 
-Bornes après filtre, sur les champs structurés seulement : texte de déclencheur 500 caractères, delta des 16 derniers messages × 1200, 8 derniers outils × résumé 400, 20 dernières décisions × fait 400. Le transcript verbatim est filtré mais pas tronqué. Les champs `from`, `role` et identifiants ne sont pas filtrés.
+Bornes après filtre, sur les champs structurés : déclencheur 500 caractères, 16 derniers messages × 1200, 8 derniers outils × résumé 400, 20 dernières décisions × fait 400. Le transcript verbatim est filtré mais pas tronqué. `from`, `role` et les identifiants ne sont pas filtrés.
 
 ### Filtre de secrets
 
-Le filtre tourne **avant** le chiffrement. Il masque uniquement le segment reconnu. Un hexadécimal de 40 caractères (un SHA de commit) devient `[REDACTED:hex]` ; le reste de la phrase reste. Le message n'est pas supprimé.
+Le filtre tourne **avant** le chiffrement et ne masque que le segment reconnu. Un hexadécimal de 40 caractères devient `[REDACTED:hex]` ; le reste de la phrase reste.
 
-Détecteurs, du plus prioritaire au moins prioritaire : clé privée PEM, mot de passe d'URL (le mot de passe seul), JWT `eyJ…`, jetons `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`, jeton Slack `xox…`, clé d'accès `AKIA`, clé `xai-`, clé `sk-`, `Bearer`, affectation `password` / `secret` / `api_key` / `token` (la valeur seule), hex `[0-9A-Fa-f]{40,}`, base64 `[A-Za-z0-9+/]{64,}={0,2}`. Courriels et téléphones sont désactivés sauf demande (`--redact-emails`, `--redact-phones`, ou `RunInput`).
-
-Le rapport `redaction.hits` liste chaque type une fois, dans l'ordre de première rencontre.
+Détecteurs, du plus prioritaire au moins prioritaire : clé privée PEM, mot de passe d'URL (le mot de passe seul), JWT `eyJ…`, jetons `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`, jeton Slack `xox…`, clé d'accès `AKIA`, clé `xai-`, clé `sk-`, `Bearer`, affectation `password` / `secret` / `api_key` / `token` (la valeur seule), hex `[0-9A-Fa-f]{40,}`, base64 `[A-Za-z0-9+/]{64,}={0,2}`. Courriels et téléphones sont désactivés sauf demande.
 
 ### Sceau
 
-Ce n'est pas HPKE (RFC 9180). Algorithme publié : `x25519-hkdf-sha256-chacha20poly1305`.
+Ce n'est pas HPKE (RFC 9180). Algorithme : `x25519-hkdf-sha256-chacha20poly1305`.
 
-La clé X25519 de l'agent est le scalaire libsodium / RFC 8032 : `SHA-512(seed ed25519)`, 32 premiers octets, puis clamp (`octet0 &= 248`, `octet31 &= 127`, `octet31 |= 64`).
+La clé X25519 de l'agent est le scalaire libsodium / RFC 8032 : `SHA-512(graine ed25519)`, 32 premiers octets, puis clamp.
 
-- `epk` : X25519 éphémère, 32 octets.
-- `eph_shared = X25519(eph_sk, clé_publique_destinataire)`.
-- `static_shared = X25519(scalaire_agent, clé_publique_destinataire)`.
-- Les deux secrets doivent être contributifs. Un résultat nul est refusé.
+- `eph_shared = X25519(eph_sk, clé_publique_destinataire)`
+- `static_shared = X25519(scalaire_agent, clé_publique_destinataire)`
+- Les deux secrets doivent être contributifs.
 - IKM = `eph_shared || static_shared` (64 octets).
-- Sel HKDF-SHA256 = `epk || clé_X25519_publique_agent || clé_X25519_publique_destinataire` (96 octets).
-- Info = `gb.run.v1/x25519-hkdf-sha256-chacha20poly1305` || `0x00` || `recipient_key_id` || `0x00` || `key_id` de l'agent.
-- Sortie HKDF : 32 octets, clé ChaCha20-Poly1305.
-- Nonce : 12 octets aléatoires, publiés dans `enc.nonce`, utilisés tels quels. Ils n'entrent pas dans le HKDF.
+- Sel = `epk || clé_X25519_publique_agent || clé_X25519_publique_destinataire` (96 octets).
+- Info = `gb.run.v1/x25519-hkdf-sha256-chacha20poly1305` || `0x00` || `recipient_key_id` || `0x00` || `key_id`.
+- Nonce : 12 octets aléatoires, publiés, non mélangés au HKDF.
 
-Données associées AEAD, UTF-8, saut de ligne final, **sans** `replay` :
+Données associées, UTF-8, saut de ligne final :
 
 ```text
 gb.run.v1
+version=2
+tenant_id={tenant_id}
+principal_id={principal_id}
 run_id={run_id}
 seq={seq}
 sent_at={sent_at}
-key_id={key_id}
+replay={true|false}
 actor={actor}
+key_id={key_id}
 recipient_key_id={recipient_key_id}
 ```
 
-Le clair est le JSON canonique de `gb.run.body.v1`. Le champ `ciphertext` est ce clair chiffré plus le tag Poly1305 de 16 octets, en base64 RFC 4648 avec padding. `epk` et `nonce` aussi.
-
-Signature ed25519. Préimage UTF-8, `replay` **absent** pour pouvoir passer le bit à `true` sans resceller :
+Préimage de signature :
 
 ```text
-gb.run.v1|{run_id}|{seq}|{sent_at}|{key_id}|{ciphertext_base64}
+gb.run.v1|{version}|{tenant_id}|{principal_id}|{run_id}|{seq}|{sent_at}|{replay}|{actor}|{key_id}|{ciphertext_base64}
 ```
 
-`sig.signed` est le SHA-256 de cette préimage, hexadécimal minuscule. `sig.value` est la signature ed25519 des **32 octets bruts** du condensat (ni l'hexadécimal, ni la préimage), en base64. `sig.alg` vaut `ed25519`. L'acteur est lié par l'AEAD, pas par la signature.
+`sig.signed` est le SHA-256 de cette préimage, hexadécimal minuscule. `sig.value` est la signature ed25519 des 32 octets bruts, en base64. `replay` vaut `true` ou `false`.
 
-Message :
+Le vecteur public est `tests/fixtures/gb_run_v1.json` (`tenant-test`, principal `p_owner`, `key_id` `gb-tenant-test-agent-test-202610-1`). Les graines sont `SHA-256("cerveau-public-test-vector-v1\0" || étiquette)` pour `agent`, `recipient`, `ephemeral` et `nonce`. Ce sont des fixtures, pas des secrets.
 
-```json
-{
-  "schema": "gb.run.v1",
-  "run_id": "run_VECTOR",
-  "seq": 7,
-  "sent_at": "2026-10-22T15:44:58Z",
-  "replay": false,
-  "agent": { "actor": "gb:agent-test" },
-  "key_id": "gb-agent-test-202610",
-  "enc": {
-    "alg": "x25519-hkdf-sha256-chacha20poly1305",
-    "recipient_key_id": "cerveau-test",
-    "epk": "…",
-    "nonce": "…",
-    "ciphertext": "…"
-  },
-  "sig": { "alg": "ed25519", "signed": "…", "value": "…" }
-}
-```
+### File et ordre
 
-Le vecteur public est `tests/fixtures/gb_run_v1.json`. Les graines sont `SHA-256("cerveau-public-test-vector-v1\0" || étiquette)` pour `agent`, `recipient`, `ephemeral` et `nonce`. Ce sont des fixtures, pas des secrets. Le test `public_vector_is_stable` ouvre le sceau et vérifie que basculer `replay` ne change ni la signature ni le clair.
+Fichier `{data}/tenants/{tenant}/agents/{agent}/queue.q`. Écriture : temporaire `0600`, `fsync`, `rename`, `fsync` du fichier et du répertoire. Verrou `flock` sur `lock`.
 
-### File locale et ordre de rejeu
-
-La file est un fichier chiffré par agent : `{CERVEAU_HOME}/agents/{id}/queue.q`. Elle survit à un crash.
-
-Écriture : fichier temporaire en mode `0600`, écriture, `fsync` du fichier, `rename`, `fsync` du fichier final et du répertoire. Un verrou exclusif consultatif (`flock`) couvre `{répertoire}/lock`. Le client refuse de lire une clé ou une file dont le mode laisse un accès au groupe ou aux autres.
-
-Format : `GBQ1` || nonce 12 octets || ChaCha20-Poly1305. Clé de file : HKDF-SHA256, sel `gb.queue.v1`, IKM = graine ed25519, info = `gb.queue.v1` || `0x00` || `agent_id` || `0x00` || `key_id`, données associées `gb.queue.v1`. Le JSON interne porte `schema`, `agent_id`, `key_id`, `next_seq` (à partir de 1) et les messages scellés (`replay` stocké à `false`). `next_seq` est strictement supérieur à chaque `seq` enregistré. Les `seq` et `run_id` sont uniques. Le fichier vide n'est pas effacé : l'effacer remettrait `next_seq` à 1.
-
-Le nouveau tour est scellé et **fsync avant tout envoi**. Règle d'ordre :
+Format : `GBQ2` || nonce 12 octets || ChaCha20-Poly1305. Clé : HKDF-SHA256, sel `gb.queue.v2`, IKM = graine ed25519, info = `gb.queue.v2` || `0x00` || `tenant_id` || `0x00` || `agent_id` || `0x00` || `key_id`. Le JSON interne (`gb.queue.v2`) garde le corps en clair **dans** ce fichier chiffré, avec `run_id`, `seq`, `sent_at` et `principal_id`, pour pouvoir resceller quand `replay` change. Le tour est enregistré et `fsync` avant tout envoi.
 
 1. Rejouer toute la file, par `seq` croissant, avant tout envoi direct.
-2. Ne jamais envoyer le tour N+1 avec `replay: false` tant que le tour N est encore en file.
-3. Seul le tour créé par cet appel, et seulement s'il est le plus ancien encore présent, part avec `replay: false`.
-4. Tout tour plus ancien part avec `replay: true`. Son enveloppe est ignorée.
-5. Chaque appel RPC a son propre délai de 2 secondes. Vider une file de N tours peut prendre N fois 2 secondes. Ce délai n'est pas une raison de sauter la file.
-6. Si un rejeu plus ancien échoue, le nouveau tour reste en file, n'est pas envoyé, et le journal de miss porte `queued_behind`.
-7. Un doublon (`409`, message `duplicate` / `already`, ou `status` `duplicate` / `already_stored`) retire le tour de la file et n'utilise pas l'enveloppe.
-8. HTTP 200 sans enveloppe : le tour est accepté et retiré. Une erreur de transport le laisse en file.
+2. Ne jamais envoyer le tour N+1 avec `replay: false` tant que N est en file.
+3. Seul le tour créé par cet appel, s'il est le plus ancien, part avec `replay: false`.
+4. Tout tour plus ancien part avec `replay: true`, rescellé. Son enveloppe est ignorée.
+5. Chaque RPC a son propre délai de 2 secondes.
+6. Si un rejeu plus ancien échoue, le nouveau tour reste en file et le journal porte `queued_behind`.
+7. Un doublon (`409`, `duplicate` / `already`) retire le tour sans utiliser l'enveloppe.
+8. HTTP 200 sans enveloppe retire le tour. Une erreur de transport le laisse en file.
 
-Un processus qui redémarre rejoue le tour persisté : le bit `replay` n'est `false` que pour le tour vivant de l'appel en cours, quand il est en tête.
+Un redémarrage rejoue les tours persistés. Le bit `replay` n'est `false` que pour le tour vivant de l'appel en cours, en tête de file.
 
 ### Appel et enveloppe
 
-Un seul JSON-RPC `tools/call`, nom d'outil `cerveau.run` par défaut. Corps limité à 2 Mio. Réponse JSON ou SSE (`data:`). L'enveloppe est prise dans `result` si `schema` vaut `gb.turn.v1`, sinon dans `structuredContent`, `envelope`, ou `content[].text`.
+Un JSON-RPC `tools/call`, outil `cerveau.run` par défaut (`CERVEAU_TOOL`). Corps limité à 2 Mio. Réponse JSON ou SSE. L'enveloppe est dans `result` si `schema` vaut `gb.turn.v1`, sinon `structuredContent`, `envelope`, ou `content[].text`.
 
-Délai dur : 2 secondes par appel. Timeout, erreur HTTP, erreur RPC, enveloppe absente, invalide ou périmée : pas d'enveloppe, et une ligne dans `{répertoire_agent}/miss.log` (`0600`, fsync) de la forme `ts= agent= run_id= seq= reason=`. Raisons : `timeout`, `unreachable`, `http`, `rpc`, `missing_envelope`, `invalid_envelope`, `stale_envelope`, `endpoint_unset`, `duplicate`, `queued_behind`.
+Délai : 2 secondes par appel. Sans URL, le tour est mis en file et il n'y a pas d'enveloppe. Journal `{répertoire_agent}/miss.log` : `ts= agent= run_id= seq= reason=`.
 
-`gb.turn.v1` accepté seulement si : `schema`, `version` numérique `1`, `builder` `eg:cerveau`, `envelope_id`, `run_id` de la grammaire ci-dessus, `generated_at`, `expires_at`, `ttl_seconds` exactement `300`, `expires_at = generated_at + 300s`, `agent.actor`, `integrity.alg = ed25519`, `integrity.key_id` égal à la clé configurée et de la même grammaire. Le condensat est le SHA-256 du corps canonique **sans** `integrity`. La signature ed25519 porte les 32 octets bruts. Décalage futur toléré : 60 secondes. `now >= expires_at` : enveloppe périmée, signature valide, non remise à l'agent. Seule une enveloppe fraîche devient un `TurnContext`.
+`gb.turn.v1` n'est accepté que si : `schema`, `version` `1`, `builder` `eg:cerveau` (nom de protocole de l'enveloppe, pas une adresse), `envelope_id`, `run_id` de la grammaire, `generated_at`, `expires_at`, `ttl_seconds` exactement `300`, `expires_at = generated_at + 300s`, `agent.actor` égal à l'acteur de la clé, `integrity.alg = ed25519`, `integrity.key_id` égal à la clé de signature épinglée. Condensat : SHA-256 du corps canonique sans `integrity`. Décalage futur toléré : 60 secondes. Seule une enveloppe fraîche devient un `TurnContext`.

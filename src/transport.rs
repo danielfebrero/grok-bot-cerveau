@@ -285,22 +285,28 @@ mod tests {
         use x25519_dalek::{PublicKey, StaticSecret};
 
         let agent = AgentKey::from_seed(
+            "tenant-test",
             "agent-test",
             [9u8; 32],
             DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            1,
         )
         .unwrap();
         let recip = StaticSecret::from([6u8; 32]);
         let recip_pub = PublicKey::from(&recip).to_bytes();
         let body = prepare_body(RunInput {
+            tenant_id: "tenant-test".into(),
+            principal_id: "p_owner".into(),
             transcript: "hello".into(),
             ..RunInput::default()
         })
         .unwrap();
         let message = seal_run(SealRequest {
             body: &body,
+            tenant_id: "tenant-test",
+            principal_id: "p_owner",
             run_id: "run_HTTP",
             seq: 1,
             sent_at: "2026-10-22T15:44:58Z",

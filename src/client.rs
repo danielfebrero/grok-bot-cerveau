@@ -10,8 +10,8 @@ use thiserror::Error;
 use crate::body::{self, prepare_body, RunInput};
 use crate::envelope::{validate_envelope, EnvelopeStatus, TurnContext, VerifyConfig};
 use crate::id::{self, may_send_direct};
-use crate::key::{self, load_agent_key, KeyError};
-use crate::queue::{new_run_id, QueueError, QueueState, QueueStore};
+use crate::key::{self, load_agent_key, load_queue_state, KeyError};
+use crate::queue::{new_run_id, QueueError, QueueState, QueuedRun};
 use crate::seal::{seal_run, RunMessage, SealError, SealRequest};
 use crate::transport::{CallOutcome, HttpTransport, Transport, TransportError};
 use crate::util::{self, now_rfc3339};
@@ -32,16 +32,42 @@ pub enum ConfigError {
     Endpoint,
     #[error("tool name is empty or too long")]
     Tool,
+    #[error("tenant id is not an ASCII token of [A-Za-z0-9_-]")]
+    Tenant,
+    #[error("principal id is not an ASCII token of [A-Za-z0-9_-]")]
+    Principal,
+    #[error("display name is empty or contains control characters")]
+    DisplayName,
+    #[error("this install is already initialized")]
+    AlreadyInitialized,
+    #[error("install was not found")]
+    NotFound,
+    #[error("the pinned server key does not match the one presented")]
+    ServerKeyMismatch,
+    #[error(
+        "the server key is not pinned; pass it to init or pin, or set CERVEAU_TRUST_ON_FIRST_USE=1"
+    )]
+    ServerUnpinned,
+    #[error("install file is inconsistent")]
+    Corrupt,
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("key: {0}")]
+    Key(#[from] KeyError),
 }
 
 #[derive(Clone)]
 pub struct ClientConfig {
-    pub home: PathBuf,
+    pub config_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub tenant_id: String,
     pub agent_id: String,
+    pub principal_id: String,
+    pub principals: Vec<String>,
     pub recipient_key_id: String,
     pub recipient_public: [u8; 32],
-    pub signing_key_id: String,
-    pub signing_public: [u8; 32],
+    pub signing_key_id: Option<String>,
+    pub signing_public: Option<[u8; 32]>,
     pub endpoint: Option<String>,
     pub tool_name: String,
     pub authorization: Option<String>,
@@ -52,8 +78,11 @@ pub struct ClientConfig {
 impl std::fmt::Debug for ClientConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientConfig")
-            .field("home", &self.home)
+            .field("config_dir", &self.config_dir)
+            .field("data_dir", &self.data_dir)
+            .field("tenant_id", &self.tenant_id)
             .field("agent_id", &self.agent_id)
+            .field("principal_id", &self.principal_id)
             .field("recipient_key_id", &self.recipient_key_id)
             .field("signing_key_id", &self.signing_key_id)
             .field("endpoint", &self.endpoint)
@@ -71,55 +100,43 @@ impl std::fmt::Debug for ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn from_env(agent_id: impl Into<String>, home: PathBuf) -> Result<Self, ConfigError> {
-        let recipient_key_id = required("CERVEAU_RECIPIENT_KEY_ID")?;
-        let signing_key_id = required("CERVEAU_SIGNING_KEY_ID")?;
-        if !id::is_key_id(&recipient_key_id) || !id::is_key_id(&signing_key_id) {
-            return Err(ConfigError::KeyId);
-        }
-        let tool_name = std::env::var("CERVEAU_TOOL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_TOOL.to_string());
-        if tool_name.len() > 64 || !tool_name.chars().all(|c| c.is_ascii_graphic() && c != ' ') {
-            return Err(ConfigError::Tool);
-        }
-        Ok(Self {
-            home,
-            agent_id: agent_id.into(),
-            recipient_key_id,
-            recipient_public: decode_env_key("CERVEAU_RECIPIENT_PUBLIC_KEY")?,
-            signing_key_id,
-            signing_public: decode_env_key("CERVEAU_SIGNING_PUBLIC_KEY")?,
-            endpoint: optional_endpoint()?,
-            tool_name,
-            authorization: nonempty("CERVEAU_MCP_AUTHORIZATION"),
-            session_id: nonempty("CERVEAU_MCP_SESSION_ID"),
-            log_stderr: true,
-        })
+    pub fn from_env(
+        tenant_id: impl Into<String>,
+        agent_id: impl Into<String>,
+        principal_id: Option<String>,
+        config_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Result<Self, ConfigError> {
+        crate::install::client_config_from_env(
+            tenant_id.into(),
+            agent_id.into(),
+            principal_id,
+            config_dir,
+            data_dir,
+        )
     }
 }
 
-fn required(name: &'static str) -> Result<String, ConfigError> {
+pub(crate) fn required(name: &'static str) -> Result<String, ConfigError> {
     match std::env::var(name) {
         Ok(value) if !value.trim().is_empty() => Ok(value.trim().to_string()),
         _ => Err(ConfigError::Missing(name)),
     }
 }
 
-fn nonempty(name: &str) -> Option<String> {
+pub(crate) fn nonempty(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 
-fn decode_env_key(name: &'static str) -> Result<[u8; 32], ConfigError> {
+pub(crate) fn decode_env_key(name: &'static str) -> Result<[u8; 32], ConfigError> {
     let raw = required(name)?;
     crate::b64::decode_array(raw.trim()).map_err(|_| ConfigError::PublicKey)
 }
 
-fn optional_endpoint() -> Result<Option<String>, ConfigError> {
+pub(crate) fn optional_endpoint() -> Result<Option<String>, ConfigError> {
     match std::env::var("CERVEAU_MCP_URL") {
         Ok(value) if !value.trim().is_empty() => Ok(Some(validate_endpoint(value.trim())?)),
         _ => Ok(None),
@@ -155,6 +172,8 @@ pub enum ClientError {
     Seq,
     #[error("run_id is not [A-Za-z0-9_-] within the length bound")]
     RunId,
+    #[error("principal is not configured for this install")]
+    Principal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,34 +279,49 @@ impl<T: Transport + 'static> Client<T> {
     /// turn is sent with `replay: false`. If an older run is still queued, the
     /// new run is not sent. Each RPC uses [`CALL_TIMEOUT`]. Envelopes returned
     /// for replayed runs are ignored.
-    pub fn run(&self, input: RunInput) -> Result<RunReport, ClientError> {
-        let key = load_agent_key(&self.config.home, &self.config.agent_id)?;
-        let dir = key::agent_dir(&self.config.home, &self.config.agent_id)?;
-        let store = QueueStore::acquire(&dir)?;
-        let mut state = store.load(&key)?;
+    pub fn run(&self, mut input: RunInput) -> Result<RunReport, ClientError> {
+        let key = load_agent_key(
+            &self.config.data_dir,
+            &self.config.tenant_id,
+            &self.config.agent_id,
+        )?;
+        if input.principal_id.is_empty() {
+            input.principal_id = self.config.principal_id.clone();
+        }
+        if !self
+            .config
+            .principals
+            .iter()
+            .any(|id| id == &input.principal_id)
+        {
+            return Err(ClientError::Principal);
+        }
+        input.tenant_id = self.config.tenant_id.clone();
+        let (store, mut state) = load_queue_state(&self.config.data_dir, &key)?;
         if state.next_seq == 0 || state.next_seq == u64::MAX {
             return Err(ClientError::Seq);
         }
         let seq = state.next_seq;
         let run_id = new_run_id()?;
         let sent_at = now_rfc3339();
+        let principal_id = input.principal_id.clone();
         let body = prepare_body(input)?;
-        let message = seal_run(SealRequest {
-            body: &body,
-            run_id: &run_id,
+        state.records.push(QueuedRun {
+            run_id: run_id.clone(),
             seq,
-            sent_at: &sent_at,
-            replay: false,
-            agent: &key,
-            recipient_key_id: &self.config.recipient_key_id,
-            recipient_public: &self.config.recipient_public,
-            randomness: None,
-        })?;
-        state.records.push(message);
+            sent_at,
+            principal_id,
+            body,
+        });
         state.next_seq = seq + 1;
         state.records.sort_by_key(|record| record.seq);
         store.store(&key, &state)?;
 
+        let dir = key::agent_dir(
+            &self.config.data_dir,
+            &self.config.tenant_id,
+            &self.config.agent_id,
+        )?;
         let drained = self.drain(&store, &key, state, Some(run_id.clone()), &dir)?;
         let queued = drained.ids.iter().any(|id| id == &run_id);
         let outcome = match drained.live {
@@ -308,10 +342,17 @@ impl<T: Transport + 'static> Client<T> {
     /// Replays the whole queue in `seq` order. Every send uses `replay: true`.
     /// Each RPC has its own 2 second timeout. Returned envelopes are ignored.
     pub fn replay(&self) -> Result<ReplayReport, ClientError> {
-        let key = load_agent_key(&self.config.home, &self.config.agent_id)?;
-        let dir = key::agent_dir(&self.config.home, &self.config.agent_id)?;
-        let store = QueueStore::acquire(&dir)?;
-        let state = store.load(&key)?;
+        let key = load_agent_key(
+            &self.config.data_dir,
+            &self.config.tenant_id,
+            &self.config.agent_id,
+        )?;
+        let dir = key::agent_dir(
+            &self.config.data_dir,
+            &self.config.tenant_id,
+            &self.config.agent_id,
+        )?;
+        let (store, state) = load_queue_state(&self.config.data_dir, &key)?;
         let drained = self.drain(&store, &key, state, None, &dir)?;
         Ok(ReplayReport {
             flushed: drained.flushed,
@@ -322,7 +363,7 @@ impl<T: Transport + 'static> Client<T> {
 
     fn drain(
         &self,
-        store: &QueueStore,
+        store: &crate::queue::QueueStore,
         key: &key::AgentKey,
         mut state: QueueState,
         live_id: Option<String>,
@@ -343,8 +384,8 @@ impl<T: Transport + 'static> Client<T> {
                 stopped = Some(MissReason::QueuedBehind);
                 break;
             }
-            let mut wire = state.records[0].clone();
-            wire.replay = !direct;
+            let record = state.records[0].clone();
+            let wire = self.seal_queued(key, &record, !direct)?;
             if !wire.replay && !may_send_direct(&seqs, wire.seq) {
                 self.note_miss(dir, &wire.run_id, wire.seq, &MissReason::QueuedBehind);
                 stopped = Some(MissReason::QueuedBehind);
@@ -403,9 +444,17 @@ impl<T: Transport + 'static> Client<T> {
                 reason: MissReason::MissingEnvelope,
             };
         };
+        let (Some(signing_key_id), Some(signing_public)) = (
+            self.config.signing_key_id.clone(),
+            self.config.signing_public,
+        ) else {
+            return RunOutcome::NoEnvelope {
+                reason: MissReason::InvalidEnvelope,
+            };
+        };
         let cfg = VerifyConfig {
-            signing_key_id: self.config.signing_key_id.clone(),
-            signing_public: self.config.signing_public,
+            signing_key_id,
+            signing_public,
             expected_actor: Some(key.actor().to_string()),
         };
         match validate_envelope(&envelope, &cfg, Utc::now()) {
@@ -417,6 +466,27 @@ impl<T: Transport + 'static> Client<T> {
                 reason: MissReason::InvalidEnvelope,
             },
         }
+    }
+
+    fn seal_queued(
+        &self,
+        key: &key::AgentKey,
+        record: &QueuedRun,
+        replay: bool,
+    ) -> Result<RunMessage, ClientError> {
+        Ok(seal_run(SealRequest {
+            body: &record.body,
+            tenant_id: &self.config.tenant_id,
+            principal_id: &record.principal_id,
+            run_id: &record.run_id,
+            seq: record.seq,
+            sent_at: &record.sent_at,
+            replay,
+            agent: key,
+            recipient_key_id: &self.config.recipient_key_id,
+            recipient_public: &self.config.recipient_public,
+            randomness: None,
+        })?)
     }
 
     fn dispatch(&self, message: &RunMessage) -> Result<CallOutcome, MissReason> {
@@ -470,11 +540,13 @@ enum Live {
     Finished(RunOutcome),
 }
 
-pub fn queue_status(home: &Path, agent_id: &str) -> Result<QueueStatus, ClientError> {
-    let key = load_agent_key(home, agent_id)?;
-    let dir = key::agent_dir(home, agent_id)?;
-    let store = QueueStore::acquire(&dir)?;
-    let state = store.load(&key)?;
+pub fn queue_status(
+    data_dir: &Path,
+    tenant_id: &str,
+    agent_id: &str,
+) -> Result<QueueStatus, ClientError> {
+    let key = load_agent_key(data_dir, tenant_id, agent_id)?;
+    let (_store, state) = load_queue_state(data_dir, &key)?;
     Ok(QueueStatus {
         pending: state.records.len() as u64,
         seqs: state.records.iter().map(|record| record.seq).collect(),
@@ -486,14 +558,17 @@ pub fn queue_status(home: &Path, agent_id: &str) -> Result<QueueStatus, ClientEr
     })
 }
 
-pub fn queue_drop(home: &Path, agent_id: &str, run_id: &str) -> Result<bool, ClientError> {
+pub fn queue_drop(
+    data_dir: &Path,
+    tenant_id: &str,
+    agent_id: &str,
+    run_id: &str,
+) -> Result<bool, ClientError> {
     if !id::is_run_id(run_id) {
         return Err(ClientError::RunId);
     }
-    let key = load_agent_key(home, agent_id)?;
-    let dir = key::agent_dir(home, agent_id)?;
-    let store = QueueStore::acquire(&dir)?;
-    let mut state = store.load(&key)?;
+    let key = load_agent_key(data_dir, tenant_id, agent_id)?;
+    let (store, mut state) = load_queue_state(data_dir, &key)?;
     let before = state.records.len();
     state.records.retain(|record| record.run_id != run_id);
     let removed = state.records.len() != before;
@@ -600,7 +675,7 @@ mod tests {
                 ulid::Ulid::new()
             ));
             std::fs::create_dir_all(&home).unwrap();
-            generate_agent_key(&home, "agent-test", false).unwrap();
+            generate_agent_key(&home, "tenant-test", "agent-test").unwrap();
             let signing_seed = [5u8; 32];
             let recipient = StaticSecret::from([6u8; 32]);
             Self {
@@ -613,12 +688,16 @@ mod tests {
         fn config(&self) -> ClientConfig {
             let signing = SigningKey::from_bytes(&self.signing_seed);
             ClientConfig {
-                home: self.home.clone(),
+                config_dir: self.home.clone(),
+                data_dir: self.home.clone(),
+                tenant_id: "tenant-test".into(),
                 agent_id: "agent-test".into(),
+                principal_id: "p_owner".into(),
+                principals: vec!["p_owner".into()],
                 recipient_key_id: "cerveau-test".into(),
                 recipient_public: self.recipient_public,
-                signing_key_id: "cerveau-test".into(),
-                signing_public: signing.verifying_key().to_bytes(),
+                signing_key_id: Some("cerveau-test".into()),
+                signing_public: Some(signing.verifying_key().to_bytes()),
                 endpoint: None,
                 tool_name: DEFAULT_TOOL.into(),
                 authorization: Some("SecretBearerValue".into()),
@@ -650,11 +729,11 @@ mod tests {
 
     fn input(text: &str) -> RunInput {
         RunInput {
+            tenant_id: "tenant-test".into(),
+            principal_id: "p_owner".into(),
             transcript: text.into(),
             messages: vec![TurnMessage {
-                origin: MessageOrigin::Human {
-                    from: "dani".into(),
-                },
+                origin: MessageOrigin::Human { claimed_from: None },
                 text: text.into(),
                 ref_id: None,
                 at: None,
@@ -707,10 +786,10 @@ mod tests {
         assert!(!log[1].ok);
         assert!(log.iter().all(|call| call.run_id != second.run_id));
         assert_never_direct_while_older_pending(&log);
-        let status = queue_status(&harness.home, "agent-test").unwrap();
+        let status = queue_status(&harness.home, "tenant-test", "agent-test").unwrap();
         assert_eq!(status.seqs, vec![first.seq, second.seq]);
         let miss = std::fs::read_to_string(
-            key::agent_dir(&harness.home, "agent-test")
+            key::agent_dir(&harness.home, "tenant-test", "agent-test")
                 .unwrap()
                 .join("miss.log"),
         )
@@ -751,7 +830,9 @@ mod tests {
         assert!(!third.queued);
         assert_eq!(third.flushed, 2);
         assert_eq!(
-            queue_status(&harness.home, "agent-test").unwrap().pending,
+            queue_status(&harness.home, "tenant-test", "agent-test")
+                .unwrap()
+                .pending,
             0
         );
         let marker = "PLAINTEXT_MARKER_9f3a";
@@ -765,11 +846,11 @@ mod tests {
         let (client, _) = harness.client(vec![false]);
         client.run(input(marker)).unwrap();
         drop(client);
-        let path = key::agent_dir(&harness.home, "agent-test")
+        let path = key::agent_dir(&harness.home, "tenant-test", "agent-test")
             .unwrap()
             .join("queue.q");
         let bytes = std::fs::read(&path).unwrap();
-        assert!(bytes.starts_with(b"GBQ1"));
+        assert!(bytes.starts_with(b"GBQ2"));
         assert!(!bytes.windows(marker.len()).any(|w| w == marker.as_bytes()));
         assert!(!String::from_utf8_lossy(&bytes).contains("sk-abcdefghijklmnopqrstuvwxyz"));
         let (client, script) = harness.client(vec![true]);

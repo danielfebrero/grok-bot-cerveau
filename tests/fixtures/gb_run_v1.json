@@ -12,16 +12,17 @@
   },
   "message": {
     "agent": {
-      "actor": "gb:agent-test"
+      "actor": "gb:tenant-test:agent-test"
     },
     "enc": {
       "alg": "x25519-hkdf-sha256-chacha20poly1305",
-      "ciphertext": "gGfiEYuXzt8cxxORZ25SsetMADjmjENvBAfFpxhpPqw5WMYw3Xnx1pndnRFZqP7EfVVM6Xd6J7XZA2k5IDz1MBOxZJLecmwqB2q22xwXXF1b/qy8QBwC0CRXJmR2shwTKJ6o0xWxDKmRo/vkihJ8fHSaE3uINgy4en8U/bBSqd8xtvERLgaMMXp4Iio9/Q672BeLLRoc3nexx7dkCBVv8PwZkQ7r/dDY0J/ppmx/2EMrHJqrZJdL5lMqoty0Vu6bT2400b/icpAs/7WqwzrhOpkFfvmDxIdEnrhHHAtnuAuO4YEmoj1VwSo9Xs0UN205BeT1tHfTdOa8NP92ET35VonQdvsQ9xgOERV6r+77vj7CDb/FeUrSKjTN9rjkYOhySYC+7da358O/yYS0805Nv0DbsLS6jsBhAOx6ZC3n/5ZhUFFU1IXhWIuGoGBqQYDGpeULhMb7BNeh0/qpJjFO4WBuJ/C0/2XsX6UwEcxNZLP9zmF+gjjNjOAhkqGg9hP0WO3KtWW/TKGv+OsYlVSLy8/DPmy+cgoj9fsu+6PLbCMe78/eNl35Lw1Xiai+L1oRZrFbf+FpfdKyWutF8Xlf1KCHwSk4jNS/buwlVr5WgJtmrqQ1BcCns4hWkrNwLQxVpRHYjCsDbJZqQAn1k/tye5of39Y3vKqsX7NKamJl3sdbT/sQWQIADt0Nn9e+wqJ6HLkFX7oE6igKiQdFZVBvznV8uucH7ihLdjOz/+F/137cKEZgekrhlfzQu4QfsF2UPmAnRg5bRJHLKSzDAogY8dSmzUKSZD3zLgxaHAicPmPrO1oGTGcCMR8nQX2aWtctdGIKkIiJ2FBAS4npLb70YduBCmpYRwM3hMvC//8DN2l9JQ==",
+      "ciphertext": "MuvgL0d+OnRhpL3V4K41qtVKzs8IIETM5hNAPgQGshVZN6sDSVLmzMCH+LxfC/suzNTuDhT3hk6CRg54ThBNJ1B44aphp+07O8tvBYXQSTsWWJPZrDBHrZ3fxa5vLRvG1Cd+YNHVqWP+wIcZCc+ECuA/K/7o6VnWp/OtaZP8064zH+xU49LSzFQXYXUiQpC/XCLSTlstuK5uTZw/b4QOQvQHbigu7p1brjJV2Zwqie7zPz/FyVJG2nLyMn9duCmNf3W194JQ3YCLbzSCBS8F10MoRGAYF8forA8upfa7HTT95Q7Fu9KrqBkekycWWP3QpPAs1S/QIhAZwGbWuVVIqSUt7EB2GdtzbOjRMkrHo3+/jwUCJiDtgGF6+jMwOzhfo5oRbnK2BmqNYxSpid3F3HIVwiI2ZQ3Qyq/UkJ9f+pJYBQeppx0T9WCx+HlOUXi7Y40mEGZit3ob29TXWWzjMDURoTxlGAKdE3fbHRrMu2AVYLs4nJNTwk0U0vI7f7DHAeczBLH/pTaxforBrPcLmLyqVjEfoOXVNk4mkfTf92KNWkNKUvswk+6E52y72T5qIcwmu00QMs+izAXrdWQCJ3kRfab9Cgt75x1ZkHcu8TPc1pZQqIogV3zaY2lQyHByrDYiqAAsG00Yq1BSozZ3wwLC+IKg9plbN2INVglVcyu/xWGAey3zbv1Gabqca9SqeaQbL9TgtMhZxgnTnm4PPrGWngzFJOM3G6skn5EoOO4bvRM76ceYvN5zv9cUA4AFT8ZcYdHIOlAYlHvhQu0sTxfUuMuXUe1VacGFGhoa7SiY5+id0bxrEY0CUymzOS0bdtH8YBBqbFsx6TwDl8+OVsWLkZq5mWsrUQSueyqikB/TP3V3/sshfPnv5DFdJ5tZ2piUcMon4xHY3owqF8r1lnGAagpXmh1V8q2bZQLm+m//VozWjeKcYjRtgw==",
       "epk": "go/SZCV0BGfJdnRWmOAAlNzhXJmfm/EjVFvFLk5BW24=",
       "nonce": "VnseuAKQld5djdit",
       "recipient_key_id": "cerveau-test"
     },
-    "key_id": "gb-agent-test-202610",
+    "key_id": "gb-tenant-test-agent-test-202610-1",
+    "principal_id": "p_owner",
     "replay": false,
     "run_id": "run_VECTOR",
     "schema": "gb.run.v1",
@@ -29,13 +30,15 @@
     "seq": 7,
     "sig": {
       "alg": "ed25519",
-      "signed": "ece589b880dfa4ad4d1474e2f2357ddcbe11fffaad1b8df26baefe4c91c89123",
-      "value": "2/cyIy8wkR+gW/lEgO/gyWPWhNIL5RhPaUFOi/G1kPJH5L1BQH2c/FgXMiaGeJg0Wj2IDVW0JG33TbcxUO4OCg=="
-    }
+      "signed": "3bbfcfd6caa04d413ecd2ca4d97cb587015777e476e73310b4e53c700c3e8bf9",
+      "value": "hvRKqG8YSyRq9lxxfBlWoaWm0IkyeWW3n9+4BJe2MNl5VJaAhuEOOkolIwGnz0IsU8MQk7QJAPG1xrh1POfsAg=="
+    },
+    "tenant_id": "tenant-test",
+    "version": 2
   },
   "nonce_hex": "567b1eb8029095de5d8dd8ad",
-  "note": "Public test vector. These keys are fixtures derived from public labels, not secrets.",
-  "plaintext": "{\"decisions\":[],\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v1\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"dani\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"dani\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
+  "note": "Public test vector for gb.run.v1 version 2. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, principal_id, replay, and actor.",
+  "plaintext": "{\"decisions\":[],\"principal_id\":\"p_owner\",\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v2\",\"tenant_id\":\"tenant-test\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
   "recipient_seed_hex": "ed787450fd1a2cb80b9acd0adda9b86bf7db89a13579b1495e2c08dfd2e038f3",
   "recipient_x25519_public_b64": "X/UDENPFfVZCGlmglzB2l8KgfIbwmzl954LwEUtJxh8="
 }

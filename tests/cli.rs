@@ -2,8 +2,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
-fn keygen_prints_only_the_public_export() {
-    let dir = std::env::temp_dir().join(format!(
+fn init_prints_a_registration_bundle_and_locks_the_key() {
+    let root = std::env::temp_dir().join(format!(
         "cerveau-cli-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -11,15 +11,25 @@ fn keygen_prints_only_the_public_export() {
             .unwrap()
             .as_nanos()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&root);
+    let config = root.join("config");
+    let data = root.join("data");
     let bin = env!("CARGO_BIN_EXE_cerveau");
     let out = Command::new(bin)
         .args([
-            "keygen",
+            "init",
+            "--tenant",
+            "tenant-cli",
+            "--principal-id",
+            "p_cli",
+            "--display-name",
+            "Cli Owner",
             "--agent",
             "agent-cli",
-            "--dir",
-            dir.to_str().unwrap(),
+            "--config-dir",
+            config.to_str().unwrap(),
+            "--data-dir",
+            data.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -29,32 +39,53 @@ fn keygen_prints_only_the_public_export() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("gb.agent_pub.v1"));
-    assert!(stdout.contains("gb-agent-cli-"));
+    assert!(stdout.contains("gb.register.v1"));
+    assert!(stdout.contains("tenant-cli"));
+    assert!(stdout.contains("p_cli"));
+    assert!(stdout.contains("gb:tenant-cli:agent-cli"));
     assert!(!stdout.contains("ed25519_seed"));
 
-    let key_path = dir.join("agents").join("agent-cli").join("key.json");
+    let key_path = data
+        .join("tenants")
+        .join("tenant-cli")
+        .join("agents")
+        .join("agent-cli")
+        .join("key.json");
     let mode = std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    let install = config
+        .join("tenants")
+        .join("tenant-cli")
+        .join("install.json");
+    let install_mode = std::fs::metadata(&install).unwrap().permissions().mode() & 0o777;
+    assert_eq!(install_mode, 0o600);
     let file = std::fs::read_to_string(&key_path).unwrap();
     let seed = seed_field(&file);
     assert!(!stdout.contains(seed), "stdout leaked the seed");
 
     let again = Command::new(bin)
         .args([
-            "pubkey",
+            "register",
+            "--tenant",
+            "tenant-cli",
             "--agent",
             "agent-cli",
-            "--dir",
-            dir.to_str().unwrap(),
+            "--config-dir",
+            config.to_str().unwrap(),
+            "--data-dir",
+            data.to_str().unwrap(),
         ])
         .output()
         .unwrap();
-    assert!(again.status.success());
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
     let pub_out = String::from_utf8(again.stdout).unwrap();
-    assert!(pub_out.contains("gb.agent_pub.v1"));
-    assert!(!pub_out.contains(seed), "pubkey leaked the seed");
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(pub_out.contains("gb.register.v1"));
+    assert!(!pub_out.contains(seed), "register leaked the seed");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 fn seed_field(file: &str) -> &str {

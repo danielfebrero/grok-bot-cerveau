@@ -2,17 +2,18 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use crate::body::RunBody;
 use crate::crypto::{self, aead_open, aead_seal, hkdf_sha256};
-use crate::id::{is_key_id, is_run_id};
+use crate::id::{is_principal_id, is_run_id};
 use crate::key::AgentKey;
-use crate::seal::RunMessage;
 use crate::util::{self, ensure_private};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const QUEUE_SCHEMA: &str = "gb.queue.v1";
-const MAGIC: &[u8; 4] = b"GBQ1";
+pub const QUEUE_SCHEMA: &str = "gb.queue.v2";
+const MAGIC: &[u8; 4] = b"GBQ2";
+const QUEUE_AAD: &[u8] = b"gb.queue.v2";
 
 #[derive(Debug, Error)]
 pub enum QueueError {
@@ -26,19 +27,29 @@ pub enum QueueError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct QueuedRun {
+    pub run_id: String,
+    pub seq: u64,
+    pub sent_at: String,
+    pub principal_id: String,
+    pub body: RunBody,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DiskQueue {
     schema: String,
+    tenant_id: String,
     agent_id: String,
     key_id: String,
     next_seq: u64,
-    records: Vec<RunMessage>,
+    records: Vec<QueuedRun>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct QueueState {
     pub next_seq: u64,
-    pub records: Vec<RunMessage>,
+    pub records: Vec<QueuedRun>,
 }
 
 pub(crate) struct QueueStore {
@@ -84,6 +95,7 @@ impl QueueStore {
         let plain = decrypt(key, &bytes)?;
         let disk: DiskQueue = serde_json::from_slice(&plain).map_err(|_| QueueError::Corrupt)?;
         if disk.schema != QUEUE_SCHEMA
+            || disk.tenant_id != key.tenant_id()
             || disk.agent_id != key.agent_id()
             || disk.key_id != key.key_id()
         {
@@ -100,7 +112,12 @@ impl QueueStore {
             if record.seq == 0 || record.seq >= disk.next_seq {
                 return Err(QueueError::Corrupt);
             }
-            if !is_run_id(&record.run_id) || !is_key_id(&record.key_id) {
+            if !is_run_id(&record.run_id) || !is_principal_id(&record.principal_id) {
+                return Err(QueueError::Corrupt);
+            }
+            if record.body.tenant_id != disk.tenant_id
+                || record.body.principal_id != record.principal_id
+            {
                 return Err(QueueError::Corrupt);
             }
             if !seen_seq.insert(record.seq) || !seen_run.insert(record.run_id.clone()) {
@@ -116,6 +133,7 @@ impl QueueStore {
     pub fn store(&self, key: &AgentKey, state: &QueueState) -> Result<(), QueueError> {
         let disk = DiskQueue {
             schema: QUEUE_SCHEMA.to_string(),
+            tenant_id: key.tenant_id().to_string(),
             agent_id: key.agent_id().to_string(),
             key_id: key.key_id().to_string(),
             next_seq: state.next_seq,
@@ -130,19 +148,20 @@ impl QueueStore {
 
 fn queue_key(key: &AgentKey) -> Result<[u8; 32], QueueError> {
     let mut info = Vec::new();
-    info.extend_from_slice(b"gb.queue.v1\x00");
+    info.extend_from_slice(b"gb.queue.v2\x00");
+    info.extend_from_slice(key.tenant_id().as_bytes());
+    info.extend_from_slice(b"\x00");
     info.extend_from_slice(key.agent_id().as_bytes());
     info.extend_from_slice(b"\x00");
     info.extend_from_slice(key.key_id().as_bytes());
-    hkdf_sha256(b"gb.queue.v1", key.seed(), &info).map_err(|_| QueueError::Corrupt)
+    hkdf_sha256(b"gb.queue.v2", key.seed(), &info).map_err(|_| QueueError::Corrupt)
 }
 
 fn encrypt(key: &AgentKey, plaintext: &[u8]) -> Result<Vec<u8>, QueueError> {
     let mut aead_key = queue_key(key)?;
     let mut nonce = [0u8; 12];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-    let ct =
-        aead_seal(&aead_key, &nonce, b"gb.queue.v1", plaintext).map_err(|_| QueueError::Corrupt)?;
+    let ct = aead_seal(&aead_key, &nonce, QUEUE_AAD, plaintext).map_err(|_| QueueError::Corrupt)?;
     crypto::zeroize_key(&mut aead_key);
     let mut out = Vec::with_capacity(4 + 12 + ct.len());
     out.extend_from_slice(MAGIC);
@@ -158,7 +177,7 @@ fn decrypt(key: &AgentKey, bytes: &[u8]) -> Result<Vec<u8>, QueueError> {
     let nonce = &bytes[4..16];
     let ct = &bytes[16..];
     let mut aead_key = queue_key(key)?;
-    let plain = aead_open(&aead_key, nonce, b"gb.queue.v1", ct).map_err(|_| QueueError::Corrupt)?;
+    let plain = aead_open(&aead_key, nonce, QUEUE_AAD, ct).map_err(|_| QueueError::Corrupt)?;
     crypto::zeroize_key(&mut aead_key);
     Ok(plain)
 }
@@ -176,10 +195,8 @@ mod tests {
     use super::*;
     use crate::body::{prepare_body, RunInput};
     use crate::key::AgentKey;
-    use crate::seal::{seal_run, SealRequest};
     use chrono::{DateTime, Utc};
     use std::os::unix::fs::PermissionsExt;
-    use x25519_dalek::{PublicKey, StaticSecret};
 
     fn scratch() -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -193,35 +210,32 @@ mod tests {
 
     fn agent() -> AgentKey {
         AgentKey::from_seed(
+            "tenant-test",
             "agent-test",
             [3u8; 32],
             DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            1,
         )
         .unwrap()
     }
 
-    fn message(agent: &AgentKey, seq: u64, marker: &str) -> RunMessage {
-        let recip = StaticSecret::from([8u8; 32]);
-        let recip_pub = PublicKey::from(&recip).to_bytes();
+    fn queued(seq: u64, marker: &str) -> QueuedRun {
         let body = prepare_body(RunInput {
+            tenant_id: "tenant-test".into(),
+            principal_id: "p_owner".into(),
             transcript: marker.to_string(),
             ..RunInput::default()
         })
         .unwrap();
-        seal_run(SealRequest {
-            body: &body,
-            run_id: &format!("run_SEQ{seq}"),
+        QueuedRun {
+            run_id: format!("run_SEQ{seq}"),
             seq,
-            sent_at: "2026-10-22T15:44:58Z",
-            replay: false,
-            agent,
-            recipient_key_id: "cerveau-test",
-            recipient_public: &recip_pub,
-            randomness: None,
-        })
-        .unwrap()
+            sent_at: "2026-10-22T15:44:58Z".into(),
+            principal_id: "p_owner".into(),
+            body,
+        }
     }
 
     #[test]
@@ -231,14 +245,14 @@ mod tests {
         let marker = "PLAINTEXT_MARKER_9f3a";
         let store = QueueStore::acquire(&dir).unwrap();
         let mut state = store.load(&agent).unwrap();
-        state.records.push(message(&agent, 2, marker));
-        state.records.push(message(&agent, 1, marker));
+        state.records.push(queued(2, marker));
+        state.records.push(queued(1, marker));
         state.next_seq = 3;
         store.store(&agent, &state).unwrap();
         drop(store);
 
         let bytes = std::fs::read(dir.join("queue.q")).unwrap();
-        assert!(bytes.starts_with(b"GBQ1"));
+        assert!(bytes.starts_with(b"GBQ2"));
         assert!(!bytes.windows(marker.len()).any(|w| w == marker.as_bytes()));
         let mode = std::fs::metadata(dir.join("queue.q"))
             .unwrap()

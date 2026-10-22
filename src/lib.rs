@@ -1,12 +1,14 @@
-//! Box-side client for the Cerveau MCP.
+//! Box-side client for a Cerveau-compatible MCP.
 //!
-//! Before a turn, an agent calls [`Client::run`]. The client redacts secret
-//! spans, seals the filtered transcript to Cerveau, and signs the ciphertext.
-//! The returned [`TurnContext`] is read-only context: it never overrides the
-//! agent's base rules or the approvals required before a side effect.
+//! Each installation has its own tenant id, principals, and agent keys. Before
+//! a turn, an agent calls [`Client::run`]. The client redacts secret spans,
+//! seals the filtered transcript, and signs the ciphertext. The returned
+//! [`TurnContext`] is read-only context: it never overrides the agent's base
+//! rules or the approvals required before a side effect.
 //!
 //! Pending runs are replayed in `seq` order before any newer direct send.
 //! A run N+1 is never sent with `replay: false` while run N is still queued.
+//! `seq` belongs to the tenant and the agent. Key rotation keeps it.
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +22,7 @@ mod client;
 mod crypto;
 mod envelope;
 mod id;
+mod install;
 mod key;
 mod queue;
 mod redact;
@@ -29,7 +32,7 @@ mod util;
 
 pub use body::{
     parse_message, parse_messages, prepare_body, AttributionError, Decision, MessageOrigin,
-    RunBody, RunInput, ToolResult, TranscriptEntry, TurnMessage, BODY_SCHEMA, OPERATOR_FROM,
+    RunBody, RunInput, ToolResult, TranscriptEntry, TurnMessage, BODY_SCHEMA,
 };
 pub use canon::canonical_json;
 pub use client::{
@@ -41,15 +44,25 @@ pub use envelope::{
     attach_integrity, sample_envelope, validate_envelope, EnvelopeError, EnvelopeStatus,
     RejectReason, TurnContext, VerifyConfig, ENVELOPE_BUILDER, ENVELOPE_TTL_SECONDS, TURN_SCHEMA,
 };
-pub use id::{is_key_id, is_run_id, is_token, AGENT_ID_MAX, KEY_ID_MAX, RUN_ID_MAX};
+pub use id::{
+    is_key_id, is_principal_id, is_run_id, is_tenant_id, is_token, AGENT_ID_MAX, KEY_ID_MAX,
+    PRINCIPAL_ID_MAX, RUN_ID_MAX, TENANT_ID_MAX,
+};
+pub use install::{
+    add_principal, config_home, init_install, load_install, pin_server, reconcile_server,
+    registration_bundle, InitRequest, InstallConfig, PresentedServer, Principal,
+    RegistrationBundle, ServerPin, INSTALL_SCHEMA, REGISTER_SCHEMA,
+};
 pub use key::{
-    agent_dir, default_home, generate_agent_key, load_agent_key, AgentKey, KeyError, PublicExport,
-    KEY_SCHEMA, PUB_SCHEMA,
+    agent_dir, data_home, generate_agent_key, load_agent_key, revoke_key, rotate_agent_key,
+    AgentKey, KeyError, PublicExport, KEY_SCHEMA, PUB_SCHEMA, STATUS_ACTIVE, STATUS_RETIRED,
+    STATUS_REVOKED,
 };
 pub use redact::{redact_text, RedactOptions, Redaction};
 pub use seal::{
     associated_data, hkdf_info, hkdf_salt, open_run, seal_run, signature_preimage, EncBlock,
-    RunMessage, SealError, SealRandomness, SealRequest, SigBlock, RUN_SCHEMA, SEAL_ALG, SIGN_ALG,
+    RunMessage, SealError, SealRandomness, SealRequest, SigBlock, RUN_SCHEMA, RUN_VERSION,
+    SEAL_ALG, SIGN_ALG,
 };
 pub use transport::{
     interpret_rpc, parse_body, CallOutcome, HttpTransport, Transport, TransportError,
