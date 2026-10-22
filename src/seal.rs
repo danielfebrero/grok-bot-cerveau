@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::account::AccountKey;
 use crate::b64;
 use crate::body::RunBody;
 use crate::canon::canonical_json;
@@ -74,6 +75,15 @@ pub struct RunMessage {
     pub key_id: String,
     pub enc: EncBlock,
     pub sig: SigBlock,
+    /// Preuve du compte. Absente : le run n'a pas d'identité de compte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountBlock {
+    pub key_id: String,
+    pub sig: String,
 }
 
 pub struct SealRequest<'a> {
@@ -88,6 +98,8 @@ pub struct SealRequest<'a> {
     pub recipient_key_id: &'a str,
     pub recipient_public: &'a [u8; 32],
     pub randomness: Option<&'a SealRandomness>,
+    /// Clé du compte. `user_id` doit être le `principal_id` du paquet.
+    pub account: Option<&'a AccountKey>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -222,6 +234,22 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
     );
     let digest = crypto::sha256(preimage.as_bytes());
     let signature = req.agent.signing_key().sign(&digest);
+    let account = match req.account {
+        None => None,
+        Some(key) => {
+            if key.user_id() != req.principal_id {
+                return Err(SealError::Id("account"));
+            }
+            if !is_key_id(key.key_id()) {
+                return Err(SealError::Id("account.key_id"));
+            }
+            let account_sig = key.signing_key().sign(&digest);
+            Some(AccountBlock {
+                key_id: key.key_id().to_string(),
+                sig: b64::encode(&account_sig.to_bytes()),
+            })
+        }
+    };
 
     Ok(RunMessage {
         schema: RUN_SCHEMA.to_string(),
@@ -248,7 +276,37 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
             signed: hex::encode(digest),
             value: b64::encode(&signature.to_bytes()),
         },
+        account,
     })
+}
+
+/// Vérifie `account.sig` sur le même digest que l'agent. Absente : rien à prouver.
+pub fn verify_account(message: &RunMessage, ed25519_public: &[u8; 32]) -> Result<(), SealError> {
+    let Some(account) = &message.account else {
+        return Ok(());
+    };
+    if !is_key_id(&account.key_id) {
+        return Err(SealError::Id("account.key_id"));
+    }
+    let preimage = signature_preimage(
+        &message.schema,
+        message.version,
+        &message.tenant_id,
+        &message.principal_id,
+        &message.run_id,
+        message.seq,
+        &message.sent_at,
+        message.replay,
+        &message.agent.actor,
+        &message.key_id,
+        &message.enc.ciphertext,
+    );
+    let digest = crypto::sha256(preimage.as_bytes());
+    let vk = VerifyingKey::from_bytes(ed25519_public).map_err(|_| SealError::Signature)?;
+    let sig_bytes = b64::decode(&account.sig).map_err(|_| SealError::Signature)?;
+    let signature = Signature::from_slice(&sig_bytes).map_err(|_| SealError::Signature)?;
+    vk.verify(&digest, &signature)
+        .map_err(|_| SealError::Signature)
 }
 
 pub fn open_run(
@@ -388,6 +446,7 @@ mod tests {
             recipient_key_id,
             recipient_public,
             randomness: None,
+            account: None,
         }
     }
 
@@ -410,6 +469,7 @@ mod tests {
         assert_eq!(message.version, RUN_VERSION);
         assert_eq!(message.tenant_id, "tenant-test");
         assert_eq!(message.principal_id, "p_owner");
+        assert!(message.account.is_none());
         let plain = open_run(&message, &recip_sec, agent.ed25519_public()).unwrap();
         let text = String::from_utf8(plain).unwrap();
         assert!(text.contains("voir "));
@@ -459,6 +519,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn account_key_signs_the_same_digest() {
+        let agent = agent();
+        let recip = StaticSecret::random_from_rng(OsRng);
+        let recip_pub = PublicKey::from(&recip).to_bytes();
+        let recip_sec = recip.to_bytes();
+        let clear = body();
+        let account = crate::account::AccountKey::from_parts(
+            "tenant-test",
+            "p_owner",
+            "compte-tenant-test-p_owner-202610-1",
+            [4u8; 32],
+        )
+        .unwrap();
+        let mut req = request(
+            &clear,
+            &agent,
+            "run_ACCOUNT",
+            "cerveau-test",
+            &recip_pub,
+            false,
+        );
+        req.account = Some(&account);
+        let message = seal_run(req).unwrap();
+        assert_eq!(message.account.as_ref().unwrap().key_id, account.key_id());
+        verify_account(&message, account.ed25519_public()).unwrap();
+        assert!(verify_account(&message, agent.ed25519_public()).is_err());
+        let plain = open_run(&message, &recip_sec, agent.ed25519_public()).unwrap();
+        assert!(!plain.is_empty());
+        assert!(serde_json::to_value(&message)
+            .unwrap()
+            .get("account")
+            .is_some());
+
+        let bare = seal_run(request(
+            &clear,
+            &agent,
+            "run_BARE",
+            "cerveau-test",
+            &recip_pub,
+            false,
+        ))
+        .unwrap();
+        assert!(bare.account.is_none());
+        assert!(serde_json::to_value(&bare)
+            .unwrap()
+            .get("account")
+            .is_none());
+        verify_account(&bare, account.ed25519_public()).unwrap();
+
+        let other = crate::account::AccountKey::from_parts(
+            "tenant-test",
+            "u_other",
+            "compte-tenant-test-u_other-202610-1",
+            [5u8; 32],
+        )
+        .unwrap();
+        let mut mismatch = request(
+            &clear,
+            &agent,
+            "run_MISMATCH",
+            "cerveau-test",
+            &recip_pub,
+            false,
+        );
+        mismatch.account = Some(&other);
+        assert!(matches!(seal_run(mismatch), Err(SealError::Id("account"))));
+    }
+
     /// Public interop vector. The seeds are SHA-256 of a fixed label, not secrets.
     #[test]
     fn public_vector_is_stable() {
@@ -491,6 +620,7 @@ mod tests {
                 ephemeral_secret: ephemeral,
                 nonce,
             }),
+            account: None,
         })
         .unwrap();
         let plain = open_run(&message, &recipient_secret, agent.ed25519_public()).unwrap();

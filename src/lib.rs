@@ -15,6 +15,7 @@
 #[cfg(not(unix))]
 compile_error!("cerveau stores private keys with Unix mode 0600 and only builds on Unix");
 
+mod account;
 mod b64;
 mod body;
 mod canon;
@@ -30,6 +31,7 @@ mod seal;
 mod transport;
 mod util;
 
+pub use account::{account_public, AccountError, AccountPublic, ACCOUNT_PUB_SCHEMA};
 pub use body::{
     parse_message, parse_messages, prepare_body, AttributionError, Decision, MessageOrigin,
     RunBody, RunInput, ToolResult, TranscriptEntry, TurnMessage, BODY_SCHEMA,
@@ -60,9 +62,9 @@ pub use key::{
 };
 pub use redact::{redact_text, RedactOptions, Redaction};
 pub use seal::{
-    associated_data, hkdf_info, hkdf_salt, open_run, seal_run, signature_preimage, EncBlock,
-    RunMessage, SealError, SealRandomness, SealRequest, SigBlock, RUN_SCHEMA, RUN_VERSION,
-    SEAL_ALG, SIGN_ALG,
+    associated_data, hkdf_info, hkdf_salt, open_run, seal_run, signature_preimage, verify_account,
+    AccountBlock, EncBlock, RunMessage, SealError, SealRandomness, SealRequest, SigBlock,
+    RUN_SCHEMA, RUN_VERSION, SEAL_ALG, SIGN_ALG,
 };
 pub use transport::{
     interpret_rpc, parse_body, CallOutcome, HttpTransport, Transport, TransportError,

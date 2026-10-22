@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::account::{self, AccountError, AccountKey};
 use crate::body::{self, prepare_body, RunInput};
 use crate::envelope::{validate_envelope, EnvelopeStatus, TurnContext, VerifyConfig};
 use crate::id::{self, may_send_direct};
@@ -174,6 +175,8 @@ pub enum ClientError {
     RunId,
     #[error("principal is not configured for this install")]
     Principal,
+    #[error("account key: {0}")]
+    Account(#[from] AccountError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,6 +477,7 @@ impl<T: Transport + 'static> Client<T> {
         record: &QueuedRun,
         replay: bool,
     ) -> Result<RunMessage, ClientError> {
+        let account = self.account_key(&record.principal_id)?;
         Ok(seal_run(SealRequest {
             body: &record.body,
             tenant_id: &self.config.tenant_id,
@@ -486,7 +490,17 @@ impl<T: Transport + 'static> Client<T> {
             recipient_key_id: &self.config.recipient_key_id,
             recipient_public: &self.config.recipient_public,
             randomness: None,
+            account: account.as_ref(),
         })?)
+    }
+
+    /// Charge la clé du compte de ce user id. Absente : pas de preuve.
+    fn account_key(&self, user_id: &str) -> Result<Option<AccountKey>, ClientError> {
+        match account::load_account_key(&self.config.data_dir, &self.config.tenant_id, user_id) {
+            Ok(key) => Ok(Some(key)),
+            Err(AccountError::NotFound) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn dispatch(&self, message: &RunMessage) -> Result<CallOutcome, MissReason> {
@@ -888,5 +902,61 @@ mod tests {
             }
         ));
         assert_eq!(*seen.lock().unwrap(), Some(CALL_TIMEOUT));
+    }
+
+    #[test]
+    fn account_sig_rides_the_wire_and_the_replay() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let harness = Harness::new();
+        let (client, script) = harness.client(vec![true]);
+        client.run(input("sans")).unwrap();
+        {
+            let log = script.log.lock().unwrap();
+            let wire: serde_json::Value = serde_json::from_str(&log[0].wire).unwrap();
+            assert!(wire.get("account").is_none());
+        }
+
+        let public =
+            crate::account::account_public(&harness.home, "tenant-test", "p_owner").unwrap();
+        let pubkey: [u8; 32] = crate::b64::decode_array(&public.ed25519_public_key).unwrap();
+        let (client, script) = harness.client(vec![false, true, true]);
+        let queued = client.run(input("avec")).unwrap();
+        assert!(queued.queued);
+        let replayed = client.replay().unwrap();
+        assert_eq!(replayed.flushed, 1);
+        let direct = client.run(input("suite")).unwrap();
+        assert!(!direct.queued);
+
+        let log = script.log.lock().unwrap();
+        assert_eq!(log.len(), 3);
+        let mut sigs = Vec::new();
+        for call in log.iter() {
+            let message: RunMessage = serde_json::from_str(&call.wire).unwrap();
+            assert_eq!(message.principal_id, "p_owner");
+            let account = message.account.as_ref().expect("account proof");
+            assert_eq!(account.key_id, public.key_id);
+            crate::seal::verify_account(&message, &pubkey).unwrap();
+            sigs.push(account.sig.clone());
+        }
+        assert!(!log[0].replay && !log[0].ok);
+        assert!(log[1].replay && log[1].ok);
+        assert!(!log[2].replay && log[2].ok);
+        assert_ne!(sigs[0], sigs[1]);
+
+        let path = harness
+            .home
+            .join("tenants")
+            .join("tenant-test")
+            .join("accounts")
+            .join("p_owner.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let (client, script) = harness.client(vec![true]);
+        let err = client.run(input("ouvert")).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Account(AccountError::Permissions)
+        ));
+        assert!(script.log.lock().unwrap().is_empty());
     }
 }

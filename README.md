@@ -233,6 +233,14 @@ gb.run.v1|{version}|{tenant_id}|{principal_id}|{run_id}|{seq}|{sent_at}|{replay}
 
 `sig.signed` est le SHA-256 de cette préimage, hexadécimal minuscule. `sig.value` est la signature ed25519 des 32 octets bruts, en base64. `replay` vaut `true` ou `false`.
 
+`account` est optionnel. Absent, le run n'a pas de preuve de compte. Présent, c'est `{ "key_id", "sig" }`. `account.sig` est l'ed25519 de la clé du compte, base64, sur le même digest de 32 octets. La graine reste dans `{data}/tenants/{tenant}/accounts/{user_id}.json`, mode `0600`.
+
+```bash
+cerveau account-key --tenant acme --principal p_alice
+```
+
+La commande imprime `gb.account_pub.v1` : `user_id`, `key_id`, `ed25519_public_key`. Pas la graine. Le serveur enregistre cette clé. Le `principal_id` du paquet doit être ce `user_id`, sinon le serveur refuse la contradiction. Sans le fichier, le paquet reste celui d'un run sans preuve de compte. Écrire le `user_id` dans le paquet ne prouve pas le compte.
+
 Le vecteur public est `tests/fixtures/gb_run_v1.json` (`tenant-test`, principal `p_owner`, `key_id` `gb-tenant-test-agent-test-202610-1`). Les graines sont `SHA-256("cerveau-public-test-vector-v1\0" || étiquette)` pour `agent`, `recipient`, `ephemeral` et `nonce`. Ce sont des fixtures, pas des secrets.
 
 ### File et ordre

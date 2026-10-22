@@ -5,10 +5,10 @@ use clap::{Parser, Subcommand};
 use serde_json::Value;
 
 use cerveau::{
-    add_principal, config_home, data_home, generate_agent_key, init_install, load_agent_key,
-    parse_messages, pin_server, queue_drop, queue_status, registration_bundle, report_json,
-    revoke_key, rotate_agent_key, validate_endpoint, Client, ClientConfig, InitRequest,
-    MessageOrigin, PresentedServer, RunInput, TurnMessage,
+    account_public, add_principal, config_home, data_home, generate_agent_key, init_install,
+    load_agent_key, parse_messages, pin_server, queue_drop, queue_status, registration_bundle,
+    report_json, revoke_key, rotate_agent_key, validate_endpoint, Client, ClientConfig,
+    InitRequest, MessageOrigin, PresentedServer, RunInput, TurnMessage,
 };
 
 fn main() {
@@ -85,6 +85,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let data = data_dir(args.scope.paths.data_dir)?;
             let export = generate_agent_key(&data, &args.scope.tenant, &args.scope.agent)?;
             println!("{}", serde_json::to_string_pretty(&export)?);
+        }
+        Cmd::AccountKey(args) => {
+            let data = data_dir(args.paths.data_dir)?;
+            let tenant = required(args.tenant, "tenant", "Tenant id")?;
+            let user_id = required(args.principal, "principal", "Account user id")?;
+            let public = account_public(&data, &tenant, &user_id)?;
+            println!("{}", serde_json::to_string_pretty(&public)?);
         }
         Cmd::Pubkey(args) => {
             let data = data_dir(args.scope.paths.data_dir)?;
@@ -382,6 +389,8 @@ enum Cmd {
     Principal(PrincipalArgs),
     /// Generate an ed25519 key for another agent of an existing tenant.
     Keygen(ScopeArgs),
+    /// Create or reprint the account-user public key. The seed stays on disk.
+    AccountKey(AccountKeyArgs),
     /// Print the active public key and key_id.
     Pubkey(ScopeArgs),
     /// Print the registration bundle for the backend operator to approve.
@@ -456,6 +465,16 @@ struct PrincipalArgs {
     principal_id: Option<String>,
     #[arg(long)]
     display_name: Option<String>,
+    #[command(flatten)]
+    paths: Paths,
+}
+
+#[derive(clap::Args)]
+struct AccountKeyArgs {
+    #[arg(long, env = "CERVEAU_TENANT")]
+    tenant: Option<String>,
+    #[arg(long, env = "CERVEAU_PRINCIPAL")]
+    principal: Option<String>,
     #[command(flatten)]
     paths: Paths,
 }

@@ -315,6 +315,7 @@ mod tests {
             recipient_key_id: "cerveau-test",
             recipient_public: &recip_pub,
             randomness: None,
+            account: None,
         })
         .unwrap();
 
