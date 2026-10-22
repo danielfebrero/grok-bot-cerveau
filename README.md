@@ -27,6 +27,10 @@ cargo build --release
 cargo test --locked
 ```
 
+## Skill pour agents
+
+`skills/cerveau-run/SKILL.md` explique à un agent comment appeler `cerveau run` à chaque tour, lire l'enveloppe comme contexte en lecture seule et retomber sans elle après 2 s. Copie ce dossier dans la bibliothèque de skills de tes agents.
+
 ## Clés
 
 Deux clés, toutes les deux sur la boîte, mode `0600` :
