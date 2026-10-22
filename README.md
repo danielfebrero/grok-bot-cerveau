@@ -130,7 +130,7 @@ fn tour() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Ce que le backend voit
 
-Le clair scellé contient le transcript filtré, `tenant_id`, `principal_id`, et les messages attribués. Le serveur ne voit pas la graine, ni l'en-tête `Authorization`, ni le nom d'affichage (il n'est pas sur le fil). Il voit l'acteur `gb:{tenant}:{agent}`, le `key_id`, et le fait que cette installation affirme qu'un principal a tapé certains textes.
+Le clair scellé contient le transcript filtré, `tenant_id` et les messages attribués. Il ne contient pas `principal_id`. Le `from` d'une ligne humaine est l'étiquette locale du locuteur, pas une preuve de compte. Le serveur ne voit pas la graine, ni l'en-tête `Authorization`, ni le nom d'affichage (il n'est pas sur le fil). Il voit l'acteur `gb:{tenant}:{agent}` et le `key_id`.
 
 ## Répertoires
 
@@ -160,11 +160,11 @@ cerveau revoke --tenant acme --agent agent-box --key-id gb-acme-agent-box-202610
 
 `revoke` passe une clé déjà retirée à `revoked`. On ne révoque pas la clé active sur place : on la fait tourner, puis on révoque l'ancienne si le backend doit la refuser. Le bundle d'enregistrement liste les deux séries pour que l'opérateur les retire.
 
-## Contrat `gb.run.v1` version 2
+## Contrat `gb.run.v1` version 3
 
-Schémas : `gb.run.v1` version **2** sur le fil, `gb.run.body.v2` dans le clair, `gb.turn.v1` pour l'enveloppe, `gb.canon.v1` pour le JSON canonique, `gb.queue.v2` pour la file, `gb.install.v1` pour l'installation, `gb.agent_key.v1` / `gb.agent_pub.v1` pour les clés, `gb.register.v1` pour le bundle.
+Schémas : `gb.run.v1` version **3** sur le fil, `gb.run.body.v2` dans le clair, `gb.turn.v1` pour l'enveloppe, `gb.canon.v1` pour le JSON canonique, `gb.queue.v2` pour la file, `gb.install.v1` pour l'installation, `gb.agent_key.v1` / `gb.agent_pub.v1` pour les clés, `gb.register.v1` pour le bundle.
 
-La version 1 signait `schema|run_id|seq|sent_at|key_id|ciphertext` et laissait `replay` hors signature. La version 2 ajoute `tenant_id`, `principal_id`, `replay` et `actor` à la préimage **et** aux données associées. Changer `replay` exige un nouveau sceau.
+La version 1 signait `schema|run_id|seq|sent_at|key_id|ciphertext` et laissait `replay` hors signature. La version 2 ajoutait `tenant_id`, `principal_id`, `replay` et `actor`. La version 3 retire `principal_id` du paquet, de la préimage et des données associées. `tenant_id`, `replay` et `actor` restent signés. Changer `replay` exige un nouveau sceau. Le user id local reste dans l'installation et dans la file, pour choisir `{data}/tenants/{tenant}/accounts/{user_id}.json`. Il ne part pas dans `gb.run`.
 
 Le JSON canonique trie les clés d'objet par unités de code UTF-16. Les chaînes suivent l'échappement `serde_json`. Les entiers n'ont pas de partie fractionnaire. Pas d'espace.
 
@@ -213,9 +213,8 @@ Données associées, UTF-8, saut de ligne final :
 
 ```text
 gb.run.v1
-version=2
+version=3
 tenant_id={tenant_id}
-principal_id={principal_id}
 run_id={run_id}
 seq={seq}
 sent_at={sent_at}
@@ -228,7 +227,7 @@ recipient_key_id={recipient_key_id}
 Préimage de signature :
 
 ```text
-gb.run.v1|{version}|{tenant_id}|{principal_id}|{run_id}|{seq}|{sent_at}|{replay}|{actor}|{key_id}|{ciphertext_base64}
+gb.run.v1|{version}|{tenant_id}|{run_id}|{seq}|{sent_at}|{replay}|{actor}|{key_id}|{ciphertext_base64}
 ```
 
 `sig.signed` est le SHA-256 de cette préimage, hexadécimal minuscule. `sig.value` est la signature ed25519 des 32 octets bruts, en base64. `replay` vaut `true` ou `false`.
@@ -239,9 +238,9 @@ gb.run.v1|{version}|{tenant_id}|{principal_id}|{run_id}|{seq}|{sent_at}|{replay}
 cerveau account-key --tenant acme --principal p_alice
 ```
 
-La commande imprime `gb.account_pub.v1` : `user_id`, `key_id`, `ed25519_public_key`. Pas la graine. Le serveur enregistre cette clé. Le `principal_id` du paquet doit être ce `user_id`, sinon le serveur refuse la contradiction. Sans le fichier, le paquet reste celui d'un run sans preuve de compte. Écrire le `user_id` dans le paquet ne prouve pas le compte.
+La commande imprime `gb.account_pub.v1` : `user_id`, `key_id`, `ed25519_public_key`. Pas la graine. Le serveur enregistre cette clé. Le paquet n'annonce pas le user id : le serveur le lit dans le registre de la clé qui a signé `account.sig`. Sans le fichier, le paquet part sans preuve de compte. Le user id local sert seulement à refuser une clé de compte qui n'est pas celle de ce tour.
 
-Le vecteur public est `tests/fixtures/gb_run_v1.json` (`tenant-test`, principal `p_owner`, `key_id` `gb-tenant-test-agent-test-202610-1`). Les graines sont `SHA-256("cerveau-public-test-vector-v1\0" || étiquette)` pour `agent`, `recipient`, `ephemeral` et `nonce`. Ce sont des fixtures, pas des secrets.
+Le vecteur public est `tests/fixtures/gb_run_v1.json` (`tenant-test`, `key_id` `gb-tenant-test-agent-test-202610-1`, version 3, sans `principal_id`). Les graines sont `SHA-256("cerveau-public-test-vector-v1\0" || étiquette)` pour `agent`, `recipient`, `ephemeral` et `nonce`. Ce sont des fixtures, pas des secrets.
 
 ### File et ordre
 

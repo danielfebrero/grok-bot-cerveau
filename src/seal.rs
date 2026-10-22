@@ -14,8 +14,9 @@ use crate::key::AgentKey;
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 
 pub const RUN_SCHEMA: &str = "gb.run.v1";
-/// Signature coverage revision. Version 2 binds tenant, principal, replay, and actor.
-pub const RUN_VERSION: u64 = 2;
+/// Signature coverage revision. Version 3 binds tenant, replay, and actor.
+/// The packet carries no principal id: the account signs the same digest.
+pub const RUN_VERSION: u64 = 3;
 pub const SEAL_ALG: &str = "x25519-hkdf-sha256-chacha20poly1305";
 pub const SIGN_ALG: &str = "ed25519";
 
@@ -66,7 +67,6 @@ pub struct RunMessage {
     pub schema: String,
     pub version: u64,
     pub tenant_id: String,
-    pub principal_id: String,
     pub run_id: String,
     pub seq: u64,
     pub sent_at: String,
@@ -89,6 +89,7 @@ pub struct AccountBlock {
 pub struct SealRequest<'a> {
     pub body: &'a RunBody,
     pub tenant_id: &'a str,
+    /// User id local. Choisit la clé de compte. N'entre pas dans le paquet.
     pub principal_id: &'a str,
     pub run_id: &'a str,
     pub seq: u64,
@@ -98,7 +99,7 @@ pub struct SealRequest<'a> {
     pub recipient_key_id: &'a str,
     pub recipient_public: &'a [u8; 32],
     pub randomness: Option<&'a SealRandomness>,
-    /// Clé du compte. `user_id` doit être le `principal_id` du paquet.
+    /// Clé du compte. `user_id` doit être le user id local du tour.
     pub account: Option<&'a AccountKey>,
 }
 
@@ -107,7 +108,6 @@ pub fn signature_preimage(
     schema: &str,
     version: u64,
     tenant_id: &str,
-    principal_id: &str,
     run_id: &str,
     seq: u64,
     sent_at: &str,
@@ -118,7 +118,7 @@ pub fn signature_preimage(
 ) -> String {
     let replay = if replay { "true" } else { "false" };
     format!(
-        "{schema}|{version}|{tenant_id}|{principal_id}|{run_id}|{seq}|{sent_at}|{replay}|{actor}|{key_id}|{ciphertext_b64}"
+        "{schema}|{version}|{tenant_id}|{run_id}|{seq}|{sent_at}|{replay}|{actor}|{key_id}|{ciphertext_b64}"
     )
 }
 
@@ -126,7 +126,6 @@ pub fn signature_preimage(
 pub fn associated_data(
     version: u64,
     tenant_id: &str,
-    principal_id: &str,
     run_id: &str,
     seq: u64,
     sent_at: &str,
@@ -137,7 +136,7 @@ pub fn associated_data(
 ) -> String {
     let replay = if replay { "true" } else { "false" };
     format!(
-        "gb.run.v1\nversion={version}\ntenant_id={tenant_id}\nprincipal_id={principal_id}\nrun_id={run_id}\nseq={seq}\nsent_at={sent_at}\nreplay={replay}\nactor={actor}\nkey_id={key_id}\nrecipient_key_id={recipient_key_id}\n"
+        "gb.run.v1\nversion={version}\ntenant_id={tenant_id}\nrun_id={run_id}\nseq={seq}\nsent_at={sent_at}\nreplay={replay}\nactor={actor}\nkey_id={key_id}\nrecipient_key_id={recipient_key_id}\n"
     )
 }
 
@@ -206,7 +205,6 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
     let aad = associated_data(
         RUN_VERSION,
         req.tenant_id,
-        req.principal_id,
         req.run_id,
         req.seq,
         req.sent_at,
@@ -223,7 +221,6 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
         RUN_SCHEMA,
         RUN_VERSION,
         req.tenant_id,
-        req.principal_id,
         req.run_id,
         req.seq,
         req.sent_at,
@@ -255,7 +252,6 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
         schema: RUN_SCHEMA.to_string(),
         version: RUN_VERSION,
         tenant_id: req.tenant_id.to_string(),
-        principal_id: req.principal_id.to_string(),
         run_id: req.run_id.to_string(),
         seq: req.seq,
         sent_at: req.sent_at.to_string(),
@@ -292,7 +288,6 @@ pub fn verify_account(message: &RunMessage, ed25519_public: &[u8; 32]) -> Result
         &message.schema,
         message.version,
         &message.tenant_id,
-        &message.principal_id,
         &message.run_id,
         message.seq,
         &message.sent_at,
@@ -321,7 +316,7 @@ pub fn open_run(
     {
         return Err(SealError::Open);
     }
-    if !is_tenant_id(&message.tenant_id) || !is_principal_id(&message.principal_id) {
+    if !is_tenant_id(&message.tenant_id) {
         return Err(SealError::Id("tenant_id"));
     }
     if !is_run_id(&message.run_id)
@@ -334,7 +329,6 @@ pub fn open_run(
         &message.schema,
         message.version,
         &message.tenant_id,
-        &message.principal_id,
         &message.run_id,
         message.seq,
         &message.sent_at,
@@ -370,7 +364,6 @@ pub fn open_run(
     let aad = associated_data(
         message.version,
         &message.tenant_id,
-        &message.principal_id,
         &message.run_id,
         message.seq,
         &message.sent_at,
@@ -468,13 +461,17 @@ mod tests {
         .unwrap();
         assert_eq!(message.version, RUN_VERSION);
         assert_eq!(message.tenant_id, "tenant-test");
-        assert_eq!(message.principal_id, "p_owner");
+        assert!(serde_json::to_value(&message)
+            .unwrap()
+            .get("principal_id")
+            .is_none());
         assert!(message.account.is_none());
         let plain = open_run(&message, &recip_sec, agent.ed25519_public()).unwrap();
         let text = String::from_utf8(plain).unwrap();
         assert!(text.contains("voir "));
         assert!(text.contains("[REDACTED:hex]"));
         assert!(text.contains("\"from\":\"p_owner\""));
+        assert!(!text.contains("\"principal_id\""));
         assert!(!text.contains("0123456789abcdef0123456789abcdef01234567"));
 
         let mut flipped = message.clone();
@@ -632,7 +629,6 @@ mod tests {
                 &message.schema,
                 message.version,
                 &message.tenant_id,
-                &message.principal_id,
                 &message.run_id,
                 message.seq,
                 &message.sent_at,
@@ -645,7 +641,7 @@ mod tests {
         });
 
         let fixture = serde_json::json!({
-            "note": "Public test vector for gb.run.v1 version 2. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, principal_id, replay, and actor.",
+            "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no principal_id.",
             "domain": "SHA-256(\"cerveau-public-test-vector-v1\\0\" || label)",
             "labels": {
                 "agent": "ed25519 seed",

@@ -108,16 +108,19 @@ impl QueueStore {
         records.sort_by_key(|m| m.seq);
         let mut seen_seq = std::collections::BTreeSet::new();
         let mut seen_run = std::collections::BTreeSet::new();
-        for record in &records {
+        for record in &mut records {
             if record.seq == 0 || record.seq >= disk.next_seq {
                 return Err(QueueError::Corrupt);
             }
             if !is_run_id(&record.run_id) || !is_principal_id(&record.principal_id) {
                 return Err(QueueError::Corrupt);
             }
-            if record.body.tenant_id != disk.tenant_id
-                || record.body.principal_id != record.principal_id
-            {
+            if record.body.tenant_id != disk.tenant_id {
+                return Err(QueueError::Corrupt);
+            }
+            if record.body.principal_id.is_empty() {
+                record.body.principal_id = record.principal_id.clone();
+            } else if record.body.principal_id != record.principal_id {
                 return Err(QueueError::Corrupt);
             }
             if !seen_seq.insert(record.seq) || !seen_run.insert(record.run_id.clone()) {

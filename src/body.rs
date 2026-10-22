@@ -125,6 +125,8 @@ pub struct RedactionReport {
 pub struct RunBody {
     pub schema: String,
     pub tenant_id: String,
+    /// User id local, pour l'attribution en mémoire. Absent du clair scellé.
+    #[serde(default, skip_serializing)]
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prev_envelope_id: Option<String>,
@@ -462,6 +464,7 @@ mod tests {
         assert!(body.transcript_delta.is_empty());
         let wire = serde_json::to_string(&body).unwrap();
         assert!(!wire.contains("Owner Display"));
+        assert!(!wire.contains("\"principal_id\""));
         assert_eq!(body.principal_id, "p_owner");
         assert_eq!(body.tenant_id, "tenant-test");
     }

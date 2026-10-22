@@ -16,13 +16,12 @@
     },
     "enc": {
       "alg": "x25519-hkdf-sha256-chacha20poly1305",
-      "ciphertext": "MuvgL0d+OnRhpL3V4K41qtVKzs8IIETM5hNAPgQGshVZN6sDSVLmzMCH+LxfC/suzNTuDhT3hk6CRg54ThBNJ1B44aphp+07O8tvBYXQSTsWWJPZrDBHrZ3fxa5vLRvG1Cd+YNHVqWP+wIcZCc+ECuA/K/7o6VnWp/OtaZP8064zH+xU49LSzFQXYXUiQpC/XCLSTlstuK5uTZw/b4QOQvQHbigu7p1brjJV2Zwqie7zPz/FyVJG2nLyMn9duCmNf3W194JQ3YCLbzSCBS8F10MoRGAYF8forA8upfa7HTT95Q7Fu9KrqBkekycWWP3QpPAs1S/QIhAZwGbWuVVIqSUt7EB2GdtzbOjRMkrHo3+/jwUCJiDtgGF6+jMwOzhfo5oRbnK2BmqNYxSpid3F3HIVwiI2ZQ3Qyq/UkJ9f+pJYBQeppx0T9WCx+HlOUXi7Y40mEGZit3ob29TXWWzjMDURoTxlGAKdE3fbHRrMu2AVYLs4nJNTwk0U0vI7f7DHAeczBLH/pTaxforBrPcLmLyqVjEfoOXVNk4mkfTf92KNWkNKUvswk+6E52y72T5qIcwmu00QMs+izAXrdWQCJ3kRfab9Cgt75x1ZkHcu8TPc1pZQqIogV3zaY2lQyHByrDYiqAAsG00Yq1BSozZ3wwLC+IKg9plbN2INVglVcyu/xWGAey3zbv1Gabqca9SqeaQbL9TgtMhZxgnTnm4PPrGWngzFJOM3G6skn5EoOO4bvRM76ceYvN5zv9cUA4AFT8ZcYdHIOlAYlHvhQu0sTxfUuMuXUe1VacGFGhoa7SiY5+id0bxrEY0CUymzOS0bdtH8YBBqbFsx6TwDl8+OVsWLkZq5mWsrUQSueyqikB/TP3V3/sshfPnv5DFdJ5tZ2piUcMon4xHY3owqF8r1lnGAagpXmh1V8q2bZQLm+m//VozWjeKcYjRtgw==",
+      "ciphertext": "MuvgL0d+OnRhpL3V4K41qtVI2cIHIFnV6BE9bRsG6UdZBK0RQxWump7Q7/UZAvEu1pm6dwzkwVfQa04zXwYac0dr4Kopp780LtQ+WqPeAy0NEquY72YP+pTeiqh/Jxee3SJrPcKap22v14oSBcDSb6s8a+q46FKWpPK9Pcnvkvg9EbpF4tzQ53kbdiJ0FJf4CBjhFlQtr7x0HNNvcpsVDJFXaDQ274BcrFNcwfRJvsjXFXbO3kNrjj+jMjAQoTaFZSaN165k6Jy7TxzMDGhH0RhlTjYWD5Go/VNr67XiQHKQ1Vqc9Ye9qHdd62ROWKGA+a082SCRTVJcnFeVrkNe73B0sThuF4xme/WePFKRtlik2lFFNm2vyHxg5HQ+I29EpI0WPyrxFlCAZFPh9NbEwm0OlWpyKEPWwaaKns5N7ZlqUk7usiBA9GSs6SlWGzulf4Q+HidisG8R2ILPVyn1byIR62M1SEvTAHGVVBqD93UAcKY429suw1sJ1I9oM7LXGaRgUu+otSXpd93Uqv0C5fP7S3ktrOXRKlVqiayP8GicExpSFuAxnKPLq3CjmHlwMN0991UedcW5xRKnKmRHa24QfLrsW1M89ydUlzBmjD/K0oZW5NV2CSvKcDFZn2V0pj9f51E6AXcdqQIL9WYi2xWVp9344tRRZyFCAFYPdGHgi2LJdSOjdP9XOfXNa96hSvNEaNLapdILiV+ezypCcLedlyOcdeMgFpM2iYZ4XfxXrBJt8d/M7YA295t5ApBDaZ4OPICOIl9b7Di5QrF8EkrEtMTWPq8QNfDGDQwMsnvDu5CF3+t+BpAwHHbiOhMTZJ21MEYjNkR6vXpDwoORStWL7Nv+n3Y+RBT/I22yqhLUeD0K9co/Y+K4rHUQaZ1S05dZvAJn05pjfe5r2xRcoFID",
       "epk": "go/SZCV0BGfJdnRWmOAAlNzhXJmfm/EjVFvFLk5BW24=",
       "nonce": "VnseuAKQld5djdit",
       "recipient_key_id": "cerveau-test"
     },
     "key_id": "gb-tenant-test-agent-test-202610-1",
-    "principal_id": "p_owner",
     "replay": false,
     "run_id": "run_VECTOR",
     "schema": "gb.run.v1",
@@ -30,15 +29,15 @@
     "seq": 7,
     "sig": {
       "alg": "ed25519",
-      "signed": "3bbfcfd6caa04d413ecd2ca4d97cb587015777e476e73310b4e53c700c3e8bf9",
-      "value": "hvRKqG8YSyRq9lxxfBlWoaWm0IkyeWW3n9+4BJe2MNl5VJaAhuEOOkolIwGnz0IsU8MQk7QJAPG1xrh1POfsAg=="
+      "signed": "e23aa2dd3b4047097f6a43d2dec04aa2e7f3f9cb92f885153576ecfc515a330b",
+      "value": "4CJWtaVPPbrgCOyJ6e/YYKZ/UFwEtmox0IwVSECi/TNyDzZlApA0tDwKWn4U0PamlVFPgvZGnwlyCEQWSw7nAQ=="
     },
     "tenant_id": "tenant-test",
-    "version": 2
+    "version": 3
   },
   "nonce_hex": "567b1eb8029095de5d8dd8ad",
-  "note": "Public test vector for gb.run.v1 version 2. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, principal_id, replay, and actor.",
-  "plaintext": "{\"decisions\":[],\"principal_id\":\"p_owner\",\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v2\",\"tenant_id\":\"tenant-test\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
+  "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no principal_id.",
+  "plaintext": "{\"decisions\":[],\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v2\",\"tenant_id\":\"tenant-test\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
   "recipient_seed_hex": "ed787450fd1a2cb80b9acd0adda9b86bf7db89a13579b1495e2c08dfd2e038f3",
   "recipient_x25519_public_b64": "X/UDENPFfVZCGlmglzB2l8KgfIbwmzl954LwEUtJxh8="
 }

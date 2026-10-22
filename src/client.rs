@@ -933,7 +933,10 @@ mod tests {
         let mut sigs = Vec::new();
         for call in log.iter() {
             let message: RunMessage = serde_json::from_str(&call.wire).unwrap();
-            assert_eq!(message.principal_id, "p_owner");
+            assert!(serde_json::from_str::<serde_json::Value>(&call.wire)
+                .unwrap()
+                .get("principal_id")
+                .is_none());
             let account = message.account.as_ref().expect("account proof");
             assert_eq!(account.key_id, public.key_id);
             crate::seal::verify_account(&message, &pubkey).unwrap();
