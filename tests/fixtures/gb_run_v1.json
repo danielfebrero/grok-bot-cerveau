@@ -1,0 +1,43 @@
+{
+  "agent_ed25519_public_b64": "Qd9Jw5R2YS8EK2VVUV7mrQ5JIjxD1GTLTIXCoshRjw8=",
+  "agent_seed_hex": "e7272dc91c54471a6e38336b1bd8732d2fd0a546701cc595698788a84c566bfe",
+  "agent_x25519_public_b64": "t3/3volmq/2t5hmwoc515D2hrku4F/58D5ukU0+qI1I=",
+  "domain": "SHA-256(\"cerveau-public-test-vector-v1\\0\" || label)",
+  "ephemeral_hex": "cdbb18a105daf5caf5ddc2100ec9609d93a8f68b7594e4062932c23216a927a7",
+  "labels": {
+    "agent": "ed25519 seed",
+    "ephemeral": "unclamped X25519 ephemeral secret (the seal clamps it)",
+    "nonce": "first 12 bytes are the ChaCha20-Poly1305 nonce",
+    "recipient": "ed25519 seed, then libsodium/RFC 8032 SHA-512 clamp to the X25519 scalar"
+  },
+  "message": {
+    "agent": {
+      "actor": "gb:tenant-test:agent-test"
+    },
+    "enc": {
+      "alg": "x25519-hkdf-sha256-chacha20poly1305",
+      "ciphertext": "MuvgL0d+OnRhpL3V4K41qtVI2cIHIFnV6BE9bRsG6UdZBK0RQxWump7Q7/UZAvEu1pm6dwzkwVfQa04zXwYac0dr4Kopp780LtQ+WqPeAy0NEquY72YP+pTeiqh/Jxee3SJrPcKap22v14oSBcDSb6s8a+q46FKWpPK9Pcnvkvg9EbpF4tzQ53kbdiJ0FJf4CBjhFlQtr7x0HNNvcpsVDJFXaDQ274BcrFNcwfRJvsjXFXbO3kNrjj+jMjAQoTaFZSaN165k6Jy7TxzMDGhH0RhlTjYWD5Go/VNr67XiQHKQ1Vqc9Ye9qHdd62ROWKGA+a082SCRTVJcnFeVrkNe73B0sThuF4xme/WePFKRtlik2lFFNm2vyHxg5HQ+I29EpI0WPyrxFlCAZFPh9NbEwm0OlWpyKEPWwaaKns5N7ZlqUk7usiBA9GSs6SlWGzulf4Q+HidisG8R2ILPVyn1byIR62M1SEvTAHGVVBqD93UAcKY429suw1sJ1I9oM7LXGaRgUu+otSXpd93Uqv0C5fP7S3ktrOXRKlVqiayP8GicExpSFuAxnKPLq3CjmHlwMN0991UedcW5xRKnKmRHa24QfLrsW1M89ydUlzBmjD/K0oZW5NV2CSvKcDFZn2V0pj9f51E6AXcdqQIL9WYi2xWVp9344tRRZyFCAFYPdGHgi2LJdSOjdP9XOfXNa96hSvNEaNLapdILiV+ezypCcLedlyOcdeMgFpM2iYZ4XfxXrBJt8d/M7YA295t5ApBDaZ4OPICOIl9b7Di5QrF8EkrEtMTWPq8QNfDGDQwMsnvDu5CF3+t+BpAwHHbiOhMTZJ21MEYjNkR6vXpDwoORStWL7Nv+n3Y+RBT/I22yqhLUeD0K9co/Y+K4rHUQaZ1S05dZvAJn05pjfe5r2xRcoFID",
+      "epk": "go/SZCV0BGfJdnRWmOAAlNzhXJmfm/EjVFvFLk5BW24=",
+      "nonce": "VnseuAKQld5djdit",
+      "recipient_key_id": "cerveau-test"
+    },
+    "key_id": "gb-tenant-test-agent-test-202610-1",
+    "replay": false,
+    "run_id": "run_VECTOR",
+    "schema": "gb.run.v1",
+    "sent_at": "2026-10-22T15:44:58Z",
+    "seq": 7,
+    "sig": {
+      "alg": "ed25519",
+      "signed": "e23aa2dd3b4047097f6a43d2dec04aa2e7f3f9cb92f885153576ecfc515a330b",
+      "value": "4CJWtaVPPbrgCOyJ6e/YYKZ/UFwEtmox0IwVSECi/TNyDzZlApA0tDwKWn4U0PamlVFPgvZGnwlyCEQWSw7nAQ=="
+    },
+    "tenant_id": "tenant-test",
+    "version": 3
+  },
+  "nonce_hex": "567b1eb8029095de5d8dd8ad",
+  "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no principal_id.",
+  "plaintext": "{\"decisions\":[],\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v2\",\"tenant_id\":\"tenant-test\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
+  "recipient_seed_hex": "ed787450fd1a2cb80b9acd0adda9b86bf7db89a13579b1495e2c08dfd2e038f3",
+  "recipient_x25519_public_b64": "X/UDENPFfVZCGlmglzB2l8KgfIbwmzl954LwEUtJxh8="
+}
