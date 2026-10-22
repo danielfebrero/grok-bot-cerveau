@@ -20,7 +20,7 @@ fn init_prints_a_registration_bundle_and_locks_the_key() {
             "init",
             "--tenant",
             "tenant-cli",
-            "--principal-id",
+            "--user-id",
             "p_cli",
             "--display-name",
             "Cli Owner",
@@ -41,7 +41,7 @@ fn init_prints_a_registration_bundle_and_locks_the_key() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("gb.register.v1"));
     assert!(stdout.contains("tenant-cli"));
-    assert!(!stdout.contains("principal_id"));
+    assert!(!stdout.contains("user_id"));
     assert!(!stdout.contains("p_cli"));
     assert!(!stdout.contains("Cli Owner"));
     assert!(stdout.contains("gb:tenant-cli:agent-cli"));
@@ -115,7 +115,7 @@ fn account_key_prints_the_public_bundle_and_locks_the_seed() {
         "account-key",
         "--tenant",
         "tenant-cli",
-        "--principal",
+        "--user",
         "u_cli",
         "--data-dir",
         data.to_str().unwrap(),

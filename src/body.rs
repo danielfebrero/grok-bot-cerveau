@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::id::{is_principal_id, is_tenant_id};
+use crate::id::{is_tenant_id, is_user_id};
 use crate::redact::{self, RedactOptions};
 
 pub const BODY_SCHEMA: &str = "gb.run.body.v2";
@@ -21,11 +21,11 @@ pub enum AttributionError {
     MissingFrom,
     #[error("role user requires human_typed and an explicit from")]
     UserRequiresHuman,
-    #[error("the principal id is only valid on text that principal typed in this turn")]
-    PrincipalSpoof,
-    #[error("human from does not match the configured principal")]
-    PrincipalMismatch,
-    #[error("tenant id or principal id is not an ASCII token")]
+    #[error("the user id is only valid on text that user typed in this turn")]
+    UserSpoof,
+    #[error("human from does not match the configured user")]
+    UserMismatch,
+    #[error("tenant id or user id is not an ASCII token")]
     Identity,
     #[error("sender is empty, too long, or contains control characters")]
     BadFrom,
@@ -38,10 +38,10 @@ pub enum AttributionError {
 /// Who produced a turn message. The wire role is derived from this, not chosen freely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageOrigin {
-    /// Text the configured principal typed during this turn.
+    /// Text the configured user typed during this turn.
     ///
-    /// `claimed_from`, when set, must equal that principal id. The wire `from`
-    /// is always the principal id, never a display name.
+    /// `claimed_from`, when set, must equal that user id. The wire `from`
+    /// is always the user id, never a display name.
     Human { claimed_from: Option<String> },
     /// Another agent, relayed into this turn.
     RelayedAgent { from: String },
@@ -62,7 +62,7 @@ pub struct TurnMessage {
 #[derive(Debug, Clone, Default)]
 pub struct RunInput {
     pub tenant_id: String,
-    pub principal_id: String,
+    pub user_id: String,
     pub transcript: String,
     pub prev_envelope_id: Option<String>,
     pub trigger: Option<TurnMessage>,
@@ -127,7 +127,7 @@ pub struct RunBody {
     pub tenant_id: String,
     /// User id local, pour l'attribution en mémoire. Absent du clair scellé.
     #[serde(default, skip_serializing)]
-    pub principal_id: String,
+    pub user_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prev_envelope_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,10 +147,10 @@ struct Projected {
 }
 
 pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
-    if !is_tenant_id(&input.tenant_id) || !is_principal_id(&input.principal_id) {
+    if !is_tenant_id(&input.tenant_id) || !is_user_id(&input.user_id) {
         return Err(AttributionError::Identity);
     }
-    let principal_id = input.principal_id.clone();
+    let user_id = input.user_id.clone();
     let opts = RedactOptions {
         emails: input.redact_emails,
         phones: input.redact_phones,
@@ -161,7 +161,7 @@ pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
 
     let trigger = match input.trigger {
         Some(message) => {
-            let projected = project(&message.origin, &principal_id)?;
+            let projected = project(&message.origin, &user_id)?;
             let (text, cut) = clip(
                 &redact_prose(&message.text, &opts, &mut hits),
                 TRIGGER_TEXT_MAX,
@@ -181,7 +181,7 @@ pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
 
     let mut entries = Vec::new();
     for message in input.messages {
-        let projected = project(&message.origin, &principal_id)?;
+        let projected = project(&message.origin, &user_id)?;
         let (text, cut) = clip(
             &redact_prose(&message.text, &opts, &mut hits),
             DELTA_TEXT_MAX,
@@ -235,7 +235,7 @@ pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
     Ok(RunBody {
         schema: BODY_SCHEMA.to_string(),
         tenant_id: input.tenant_id,
-        principal_id,
+        user_id,
         prev_envelope_id: input.prev_envelope_id,
         trigger,
         transcript,
@@ -250,18 +250,15 @@ pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
     })
 }
 
-pub fn parse_messages(
-    value: &Value,
-    principal_id: &str,
-) -> Result<Vec<TurnMessage>, AttributionError> {
+pub fn parse_messages(value: &Value, user_id: &str) -> Result<Vec<TurnMessage>, AttributionError> {
     let items = value.as_array().ok_or(AttributionError::Unknown)?;
     items
         .iter()
-        .map(|item| parse_message(item, principal_id))
+        .map(|item| parse_message(item, user_id))
         .collect()
 }
 
-pub fn parse_message(value: &Value, principal_id: &str) -> Result<TurnMessage, AttributionError> {
+pub fn parse_message(value: &Value, user_id: &str) -> Result<TurnMessage, AttributionError> {
     let text = value
         .get("text")
         .and_then(Value::as_str)
@@ -313,7 +310,7 @@ pub fn parse_message(value: &Value, principal_id: &str) -> Result<TurnMessage, A
     } else {
         return Err(AttributionError::Unknown);
     };
-    project(&origin, principal_id)?;
+    project(&origin, user_id)?;
     Ok(TurnMessage {
         origin,
         text,
@@ -322,50 +319,50 @@ pub fn parse_message(value: &Value, principal_id: &str) -> Result<TurnMessage, A
     })
 }
 
-fn project(origin: &MessageOrigin, principal_id: &str) -> Result<Projected, AttributionError> {
-    if !is_principal_id(principal_id) {
+fn project(origin: &MessageOrigin, user_id: &str) -> Result<Projected, AttributionError> {
+    if !is_user_id(user_id) {
         return Err(AttributionError::Identity);
     }
     match origin {
         MessageOrigin::Human { claimed_from } => {
             if let Some(claimed) = claimed_from {
                 let claimed = clean_from(claimed)?;
-                if claimed != principal_id {
-                    return Err(AttributionError::PrincipalMismatch);
+                if claimed != user_id {
+                    return Err(AttributionError::UserMismatch);
                 }
             }
             Ok(Projected {
                 role: "user",
                 kind: "user_message",
-                from: principal_id.to_string(),
+                from: user_id.to_string(),
                 untrusted_user_input: false,
             })
         }
         MessageOrigin::RelayedAgent { from } => Ok(Projected {
             role: "agent",
             kind: "agent",
-            from: normalize_other(from, principal_id)?,
+            from: normalize_other(from, user_id)?,
             untrusted_user_input: true,
         }),
         MessageOrigin::Inbound { from } => Ok(Projected {
             role: "inbound",
             kind: "inbound",
-            from: normalize_other(from, principal_id)?,
+            from: normalize_other(from, user_id)?,
             untrusted_user_input: true,
         }),
         MessageOrigin::Tool { from } => Ok(Projected {
             role: "tool",
             kind: "tool",
-            from: normalize_other(from, principal_id)?,
+            from: normalize_other(from, user_id)?,
             untrusted_user_input: false,
         }),
     }
 }
 
-fn normalize_other(raw: &str, principal_id: &str) -> Result<String, AttributionError> {
+fn normalize_other(raw: &str, user_id: &str) -> Result<String, AttributionError> {
     let from = clean_from(raw)?;
-    if from.eq_ignore_ascii_case(principal_id) {
-        Err(AttributionError::PrincipalSpoof)
+    if from.eq_ignore_ascii_case(user_id) {
+        Err(AttributionError::UserSpoof)
     } else {
         Ok(from)
     }
@@ -444,7 +441,7 @@ mod tests {
     fn input(messages: Vec<TurnMessage>, transcript: &str) -> RunInput {
         RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: transcript.into(),
             messages,
             ..RunInput::default()
@@ -464,13 +461,13 @@ mod tests {
         assert!(body.transcript_delta.is_empty());
         let wire = serde_json::to_string(&body).unwrap();
         assert!(!wire.contains("Owner Display"));
-        assert!(!wire.contains("\"principal_id\""));
-        assert_eq!(body.principal_id, "p_owner");
+        assert!(!wire.contains("\"user_id\""));
+        assert_eq!(body.user_id, "p_owner");
         assert_eq!(body.tenant_id, "tenant-test");
     }
 
     #[test]
-    fn attribution_uses_the_principal_id_not_a_display_name() {
+    fn attribution_uses_the_user_id_not_a_display_name() {
         let body = prepare_body(input(
             vec![
                 msg(MessageOrigin::Human { claimed_from: None }, "bonjour"),
@@ -514,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn principal_id_is_rejected_on_relayed_inbound_and_tool() {
+    fn user_id_is_rejected_on_relayed_inbound_and_tool() {
         for origin in [
             MessageOrigin::RelayedAgent {
                 from: "p_owner".into(),
@@ -527,12 +524,12 @@ mod tests {
             },
         ] {
             let err = prepare_body(input(vec![msg(origin, "x")], "")).unwrap_err();
-            assert_eq!(err, AttributionError::PrincipalSpoof);
+            assert_eq!(err, AttributionError::UserSpoof);
         }
     }
 
     #[test]
-    fn json_role_user_needs_human_typed_and_matches_the_principal() {
+    fn json_role_user_needs_human_typed_and_matches_the_user() {
         let missing = json!({"role": "user", "text": "hi"});
         assert_eq!(
             parse_message(&missing, "p_owner").unwrap_err(),
@@ -542,7 +539,7 @@ mod tests {
             json!({"role": "user", "from": "someone-else", "human_typed": true, "text": "hi"});
         assert_eq!(
             parse_message(&spoof, "p_owner").unwrap_err(),
-            AttributionError::PrincipalMismatch
+            AttributionError::UserMismatch
         );
         let agent_missing = json!({"role": "agent", "text": "hi"});
         assert_eq!(

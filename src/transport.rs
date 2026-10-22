@@ -34,6 +34,80 @@ pub struct HttpTransport {
     session_id: Option<String>,
 }
 
+/// Lit la clé publique du serveur dans la réponse `initialize`.
+///
+/// Absent : le serveur n'a pas encore publié de clé. L'appelant n'épingle rien.
+pub fn discover_server(url: &str) -> Result<crate::install::PresentedServer, TransportError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(2))
+        .timeout_connect(Duration::from_secs(2))
+        .timeout_read(Duration::from_secs(2))
+        .build();
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "cerveau", "version": env!("CARGO_PKG_VERSION")}
+        }
+    });
+    let response = agent
+        .post(url)
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .set("Connection", "close")
+        .send_string(&payload.to_string())
+        .map_err(|err| match err {
+            ureq::Error::Status(code, _) => TransportError::Http(code),
+            ureq::Error::Transport(err) => map_transport(&err),
+        })?;
+    let mut buf = String::new();
+    response
+        .into_reader()
+        .take(64 * 1024 + 1)
+        .read_to_string(&mut buf)
+        .map_err(|_| TransportError::Protocol)?;
+    if buf.len() > 64 * 1024 {
+        return Err(TransportError::Protocol);
+    }
+    let value: Value = serde_json::from_str(&buf).map_err(|_| TransportError::Protocol)?;
+    let info = value
+        .pointer("/result/cerveau")
+        .ok_or(TransportError::Protocol)?;
+    let recipient_key_id = info
+        .get("recipient_key_id")
+        .and_then(Value::as_str)
+        .ok_or(TransportError::Protocol)?
+        .to_string();
+    let recipient_raw = info
+        .get("recipient_public_key")
+        .and_then(Value::as_str)
+        .ok_or(TransportError::Protocol)?;
+    let recipient_public =
+        crate::b64::decode_array(recipient_raw).map_err(|_| TransportError::Protocol)?;
+    let signing = match (
+        info.get("signing_key_id").and_then(Value::as_str),
+        info.get("signing_public_key").and_then(Value::as_str),
+    ) {
+        (Some(id), Some(raw)) => Some((
+            id.to_string(),
+            crate::b64::decode_array(raw).map_err(|_| TransportError::Protocol)?,
+        )),
+        (None, None) => None,
+        _ => return Err(TransportError::Protocol),
+    };
+    Ok(crate::install::PresentedServer {
+        endpoint: Some(url.to_string()),
+        recipient_key_id: Some(recipient_key_id),
+        recipient_public: Some(recipient_public),
+        signing_key_id: signing.as_ref().map(|(id, _)| id.clone()),
+        signing_public: signing.map(|(_, key)| key),
+        trust_on_first_use: true,
+    })
+}
+
 impl HttpTransport {
     pub fn new(
         endpoint: Option<String>,
@@ -298,7 +372,7 @@ mod tests {
         let recip_pub = PublicKey::from(&recip).to_bytes();
         let body = prepare_body(RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: "hello".into(),
             ..RunInput::default()
         })
@@ -306,7 +380,7 @@ mod tests {
         let message = seal_run(SealRequest {
             body: &body,
             tenant_id: "tenant-test",
-            principal_id: "p_owner",
+            user_id: "p_owner",
             run_id: "run_HTTP",
             seq: 1,
             sent_at: "2026-10-22T15:44:58Z",

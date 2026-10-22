@@ -9,13 +9,13 @@ use crate::b64;
 use crate::body::RunBody;
 use crate::canon::canonical_json;
 use crate::crypto::{self, aead_open, aead_seal, hkdf_sha256};
-use crate::id::{self, is_key_id, is_principal_id, is_run_id, is_tenant_id};
+use crate::id::{self, is_key_id, is_run_id, is_tenant_id, is_user_id};
 use crate::key::AgentKey;
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 
 pub const RUN_SCHEMA: &str = "gb.run.v1";
 /// Signature coverage revision. Version 3 binds tenant, replay, and actor.
-/// The packet carries no principal id: the account signs the same digest.
+/// The packet carries no user id: the account signs the same digest.
 pub const RUN_VERSION: u64 = 3;
 pub const SEAL_ALG: &str = "x25519-hkdf-sha256-chacha20poly1305";
 pub const SIGN_ALG: &str = "ed25519";
@@ -44,6 +44,12 @@ pub enum SealError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRef {
     pub actor: String,
+    /// Publique ed25519. Le serveur l'enregistre si cette clé d'agent est nouvelle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ed25519_public_key: Option<String>,
+    /// Publique X25519, dérivée de la même graine. Sert au déchiffrement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x25519_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,13 +90,16 @@ pub struct RunMessage {
 pub struct AccountBlock {
     pub key_id: String,
     pub sig: String,
+    /// Publique ed25519 du compte. Le serveur l'enregistre si cette clé est nouvelle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ed25519_public_key: Option<String>,
 }
 
 pub struct SealRequest<'a> {
     pub body: &'a RunBody,
     pub tenant_id: &'a str,
     /// User id local. Choisit la clé de compte. N'entre pas dans le paquet.
-    pub principal_id: &'a str,
+    pub user_id: &'a str,
     pub run_id: &'a str,
     pub seq: u64,
     pub sent_at: &'a str,
@@ -161,8 +170,8 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
     if !is_tenant_id(req.tenant_id) || req.body.tenant_id != req.tenant_id {
         return Err(SealError::Id("tenant_id"));
     }
-    if !is_principal_id(req.principal_id) || req.body.principal_id != req.principal_id {
-        return Err(SealError::Id("principal_id"));
+    if !is_user_id(req.user_id) || req.body.user_id != req.user_id {
+        return Err(SealError::Id("user_id"));
     }
     if !is_run_id(req.run_id) {
         return Err(SealError::Id("run_id"));
@@ -234,7 +243,7 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
     let account = match req.account {
         None => None,
         Some(key) => {
-            if key.user_id() != req.principal_id {
+            if key.user_id() != req.user_id {
                 return Err(SealError::Id("account"));
             }
             if !is_key_id(key.key_id()) {
@@ -244,6 +253,7 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
             Some(AccountBlock {
                 key_id: key.key_id().to_string(),
                 sig: b64::encode(&account_sig.to_bytes()),
+                ed25519_public_key: Some(b64::encode(key.ed25519_public())),
             })
         }
     };
@@ -258,6 +268,8 @@ pub fn seal_run(req: SealRequest<'_>) -> Result<RunMessage, SealError> {
         replay: req.replay,
         agent: AgentRef {
             actor: req.agent.actor().to_string(),
+            ed25519_public_key: Some(b64::encode(req.agent.ed25519_public())),
+            x25519_public_key: Some(b64::encode(req.agent.x25519_public())),
         },
         key_id: req.agent.key_id().to_string(),
         enc: EncBlock {
@@ -406,7 +418,7 @@ mod tests {
     fn body() -> crate::body::RunBody {
         prepare_body(RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: "voir 0123456789abcdef0123456789abcdef01234567 merci".into(),
             messages: vec![TurnMessage {
                 origin: MessageOrigin::Human { claimed_from: None },
@@ -430,7 +442,7 @@ mod tests {
         SealRequest {
             body,
             tenant_id: "tenant-test",
-            principal_id: "p_owner",
+            user_id: "p_owner",
             run_id,
             seq: 3,
             sent_at: "2026-10-22T15:44:58Z",
@@ -463,7 +475,7 @@ mod tests {
         assert_eq!(message.tenant_id, "tenant-test");
         assert!(serde_json::to_value(&message)
             .unwrap()
-            .get("principal_id")
+            .get("user_id")
             .is_none());
         assert!(message.account.is_none());
         let plain = open_run(&message, &recip_sec, agent.ed25519_public()).unwrap();
@@ -471,7 +483,7 @@ mod tests {
         assert!(text.contains("voir "));
         assert!(text.contains("[REDACTED:hex]"));
         assert!(text.contains("\"from\":\"p_owner\""));
-        assert!(!text.contains("\"principal_id\""));
+        assert!(!text.contains("\"user_id\""));
         assert!(!text.contains("0123456789abcdef0123456789abcdef01234567"));
 
         let mut flipped = message.clone();
@@ -605,7 +617,7 @@ mod tests {
         let message = seal_run(SealRequest {
             body: &body,
             tenant_id: "tenant-test",
-            principal_id: "p_owner",
+            user_id: "p_owner",
             run_id: "run_VECTOR",
             seq: 7,
             sent_at: "2026-10-22T15:44:58Z",
@@ -641,7 +653,7 @@ mod tests {
         });
 
         let fixture = serde_json::json!({
-            "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no principal_id.",
+            "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no user_id.",
             "domain": "SHA-256(\"cerveau-public-test-vector-v1\\0\" || label)",
             "labels": {
                 "agent": "ed25519 seed",
@@ -689,7 +701,7 @@ mod tests {
         };
         prepare_body(RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: "commit 0123456789abcdef0123456789abcdef01234567 ok".into(),
             trigger: Some(human.clone()),
             messages: vec![

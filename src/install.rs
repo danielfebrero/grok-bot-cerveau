@@ -6,7 +6,7 @@ use crate::b64;
 use crate::client::{
     decode_env_key, nonempty, optional_endpoint, ClientConfig, ConfigError, DEFAULT_TOOL,
 };
-use crate::id::{is_key_id, is_principal_id, is_tenant_id};
+use crate::id::{is_key_id, is_tenant_id, is_user_id};
 use crate::key::{
     self, generate_agent_key, retired_records, PublicExport, STATUS_RETIRED, STATUS_REVOKED,
 };
@@ -16,8 +16,8 @@ pub const INSTALL_SCHEMA: &str = "gb.install.v1";
 pub const REGISTER_SCHEMA: &str = "gb.register.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Principal {
-    pub principal_id: String,
+pub struct User {
+    pub user_id: String,
     pub display_name: String,
 }
 
@@ -41,7 +41,7 @@ pub struct ServerPin {
 pub struct InstallConfig {
     pub schema: String,
     pub tenant_id: String,
-    pub principals: Vec<Principal>,
+    pub users: Vec<User>,
     pub server: ServerPin,
 }
 
@@ -62,7 +62,7 @@ pub struct InitRequest {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub tenant_id: String,
-    pub principal_id: String,
+    pub user_id: String,
     pub display_name: String,
     pub agent_id: String,
     pub endpoint: Option<String>,
@@ -95,7 +95,7 @@ pub fn config_home() -> Result<PathBuf, ConfigError> {
 }
 
 pub fn init_install(req: InitRequest) -> Result<(InstallConfig, PublicExport), ConfigError> {
-    validate_identity(&req.tenant_id, &req.principal_id, &req.display_name)?;
+    validate_identity(&req.tenant_id, &req.user_id, &req.display_name)?;
     if install_path(&req.config_dir, &req.tenant_id).exists() {
         return Err(ConfigError::AlreadyInitialized);
     }
@@ -115,8 +115,8 @@ pub fn init_install(req: InitRequest) -> Result<(InstallConfig, PublicExport), C
     let install = InstallConfig {
         schema: INSTALL_SCHEMA.to_string(),
         tenant_id: req.tenant_id.clone(),
-        principals: vec![Principal {
-            principal_id: req.principal_id,
+        users: vec![User {
+            user_id: req.user_id,
             display_name: req.display_name,
         }],
         server,
@@ -126,28 +126,24 @@ pub fn init_install(req: InitRequest) -> Result<(InstallConfig, PublicExport), C
     Ok((install, export))
 }
 
-pub fn add_principal(
+pub fn add_user(
     config_dir: &Path,
     tenant_id: &str,
-    principal_id: &str,
+    user_id: &str,
     display_name: &str,
-) -> Result<Principal, ConfigError> {
-    validate_identity(tenant_id, principal_id, display_name)?;
+) -> Result<User, ConfigError> {
+    validate_identity(tenant_id, user_id, display_name)?;
     let mut install = load_install(config_dir, tenant_id)?;
-    if install
-        .principals
-        .iter()
-        .any(|p| p.principal_id == principal_id)
-    {
+    if install.users.iter().any(|p| p.user_id == user_id) {
         return Err(ConfigError::AlreadyInitialized);
     }
-    let principal = Principal {
-        principal_id: principal_id.to_string(),
+    let user = User {
+        user_id: user_id.to_string(),
         display_name: display_name.to_string(),
     };
-    install.principals.push(principal.clone());
+    install.users.push(user.clone());
     save_install(config_dir, &install)?;
-    Ok(principal)
+    Ok(user)
 }
 
 pub fn pin_server(
@@ -179,6 +175,61 @@ pub fn reconcile_server(
     Ok(install.server)
 }
 
+/// Crée l'installation, la clé d'agent et la clé d'utilisateur si elles manquent.
+///
+/// `run` appelle ceci avant de sceller. Aucune commande d'init n'est exigée.
+pub fn ensure_local(
+    config_dir: &Path,
+    data_dir: &Path,
+    tenant_id: &str,
+    agent_id: &str,
+    user_id: &str,
+    endpoint: Option<&str>,
+) -> Result<(), ConfigError> {
+    if !is_tenant_id(tenant_id) {
+        return Err(ConfigError::Tenant);
+    }
+    if !is_user_id(user_id) {
+        return Err(ConfigError::User);
+    }
+    let endpoint = match endpoint {
+        Some(url) if !url.is_empty() => Some(crate::client::validate_endpoint(url)?),
+        _ => None,
+    };
+    if load_install(config_dir, tenant_id).is_err() {
+        init_install(InitRequest {
+            config_dir: config_dir.to_path_buf(),
+            data_dir: data_dir.to_path_buf(),
+            tenant_id: tenant_id.to_string(),
+            user_id: user_id.to_string(),
+            display_name: user_id.to_string(),
+            agent_id: agent_id.to_string(),
+            endpoint: endpoint.clone(),
+            recipient_key_id: None,
+            recipient_public: None,
+            signing_key_id: None,
+            signing_public: None,
+            tool_name: None,
+        })?;
+    } else if key::load_agent_key(data_dir, tenant_id, agent_id).is_err() {
+        key::generate_agent_key(data_dir, tenant_id, agent_id)?;
+    }
+    let install = load_install(config_dir, tenant_id)?;
+    if !install.users.iter().any(|u| u.user_id == user_id) {
+        add_user(config_dir, tenant_id, user_id, user_id)?;
+    }
+    if let Some(url) = endpoint {
+        let mut install = load_install(config_dir, tenant_id)?;
+        if install.server.endpoint.is_none() {
+            install.server.endpoint = Some(url);
+            save_install(config_dir, &install)?;
+        }
+    }
+    crate::account::account_public(data_dir, tenant_id, user_id)
+        .map_err(|_| ConfigError::Corrupt)?;
+    Ok(())
+}
+
 pub fn load_install(config_dir: &Path, tenant_id: &str) -> Result<InstallConfig, ConfigError> {
     if !is_tenant_id(tenant_id) {
         return Err(ConfigError::Tenant);
@@ -201,20 +252,16 @@ pub fn registration_bundle(
     data_dir: &Path,
     tenant_id: &str,
     agent_id: &str,
-    principal_id: Option<&str>,
+    user_id: Option<&str>,
 ) -> Result<RegistrationBundle, ConfigError> {
     let install = load_install(config_dir, tenant_id)?;
-    let principal_id = match principal_id {
+    let user_id = match user_id {
         Some(id) => id.to_string(),
-        None if install.principals.len() == 1 => install.principals[0].principal_id.clone(),
-        None => return Err(ConfigError::Missing("principal")),
+        None if install.users.len() == 1 => install.users[0].user_id.clone(),
+        None => return Err(ConfigError::Missing("user")),
     };
-    if !install
-        .principals
-        .iter()
-        .any(|p| p.principal_id == principal_id)
-    {
-        return Err(ConfigError::Principal);
+    if !install.users.iter().any(|p| p.user_id == user_id) {
+        return Err(ConfigError::User);
     }
     let key = key::load_agent_key(data_dir, tenant_id, agent_id)?;
     let retired = retired_records(data_dir, tenant_id, agent_id)?;
@@ -242,7 +289,7 @@ pub fn registration_bundle(
 pub fn client_config_from_env(
     tenant_id: String,
     agent_id: String,
-    principal_id: Option<String>,
+    user_id: Option<String>,
     config_dir: PathBuf,
     data_dir: PathBuf,
 ) -> Result<ClientConfig, ConfigError> {
@@ -250,18 +297,13 @@ pub fn client_config_from_env(
         return Err(ConfigError::Tenant);
     }
     let install = load_install(&config_dir, &tenant_id)?;
-    let principal_id = match principal_id.filter(|s| !s.is_empty()) {
+    let user_id = match user_id.filter(|s| !s.is_empty()) {
         Some(id) => id,
-        None if install.principals.len() == 1 => install.principals[0].principal_id.clone(),
-        None => return Err(ConfigError::Missing("CERVEAU_PRINCIPAL")),
+        None if install.users.len() == 1 => install.users[0].user_id.clone(),
+        None => return Err(ConfigError::Missing("CERVEAU_USER")),
     };
-    if !is_principal_id(&principal_id)
-        || !install
-            .principals
-            .iter()
-            .any(|p| p.principal_id == principal_id)
-    {
-        return Err(ConfigError::Principal);
+    if !is_user_id(&user_id) || !install.users.iter().any(|p| p.user_id == user_id) {
+        return Err(ConfigError::User);
     }
     let presented = PresentedServer {
         endpoint: optional_endpoint()?,
@@ -304,12 +346,8 @@ pub fn client_config_from_env(
         data_dir,
         tenant_id,
         agent_id,
-        principal_id: principal_id.clone(),
-        principals: install
-            .principals
-            .into_iter()
-            .map(|p| p.principal_id)
-            .collect(),
+        user_id: user_id.clone(),
+        users: install.users.into_iter().map(|p| p.user_id).collect(),
         recipient_key_id,
         recipient_public,
         signing_key_id,
@@ -457,14 +495,14 @@ fn decode_pin(raw: Option<&str>) -> Result<[u8; 32], ConfigError> {
 
 fn validate_identity(
     tenant_id: &str,
-    principal_id: &str,
+    user_id: &str,
     display_name: &str,
 ) -> Result<(), ConfigError> {
     if !is_tenant_id(tenant_id) {
         return Err(ConfigError::Tenant);
     }
-    if !is_principal_id(principal_id) {
-        return Err(ConfigError::Principal);
+    if !is_user_id(user_id) {
+        return Err(ConfigError::User);
     }
     let name = display_name.trim();
     if name.is_empty() || name.chars().count() > 200 || name.chars().any(|c| c.is_control()) {
@@ -522,7 +560,7 @@ mod tests {
             config_dir: config.to_path_buf(),
             data_dir: data.to_path_buf(),
             tenant_id: tenant.into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             display_name: "Owner Display".into(),
             agent_id: agent.into(),
             endpoint: None,
@@ -561,7 +599,7 @@ mod tests {
         let client_a = Client::with_transport(cfg_a, fail);
         let report_a = client_a
             .run(RunInput {
-                principal_id: "p_owner".into(),
+                user_id: "p_owner".into(),
                 transcript: "marker-tenant-a".into(),
                 ..RunInput::default()
             })
@@ -569,7 +607,7 @@ mod tests {
         assert_eq!(report_a.seq, 1);
         let report_a2 = client_a
             .run(RunInput {
-                principal_id: "p_owner".into(),
+                user_id: "p_owner".into(),
                 transcript: "marker-tenant-a-2".into(),
                 ..RunInput::default()
             })
@@ -582,7 +620,7 @@ mod tests {
         );
         let report_b = client_b
             .run(RunInput {
-                principal_id: "p_owner".into(),
+                user_id: "p_owner".into(),
                 transcript: "marker-tenant-b".into(),
                 ..RunInput::default()
             })
@@ -609,7 +647,7 @@ mod tests {
             config_dir: config.clone(),
             data_dir: data.clone(),
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             display_name: "Owner Display".into(),
             agent_id: "agent-test".into(),
             endpoint: Some("https://cerveau.example/mcp".into()),
@@ -693,8 +731,8 @@ mod tests {
             data_dir: data.to_path_buf(),
             tenant_id: tenant.into(),
             agent_id: agent.into(),
-            principal_id: "p_owner".into(),
-            principals: vec!["p_owner".into()],
+            user_id: "p_owner".into(),
+            users: vec!["p_owner".into()],
             recipient_key_id: "cerveau-test".into(),
             recipient_public: recipient,
             signing_key_id: None,

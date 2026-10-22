@@ -1,6 +1,6 @@
 //! Box-side client for a Cerveau-compatible MCP.
 //!
-//! Each installation has its own tenant id, principals, and agent keys. Before
+//! Each installation has its own tenant, a user key, and agent keys. Before
 //! a turn, an agent calls [`Client::run`]. The client redacts secret spans,
 //! seals the filtered transcript, and signs the ciphertext. The returned
 //! [`TurnContext`] is read-only context: it never overrides the agent's base
@@ -47,13 +47,13 @@ pub use envelope::{
     RejectReason, TurnContext, VerifyConfig, ENVELOPE_BUILDER, ENVELOPE_TTL_SECONDS, TURN_SCHEMA,
 };
 pub use id::{
-    is_key_id, is_principal_id, is_run_id, is_tenant_id, is_token, AGENT_ID_MAX, KEY_ID_MAX,
-    PRINCIPAL_ID_MAX, RUN_ID_MAX, TENANT_ID_MAX,
+    is_key_id, is_run_id, is_tenant_id, is_token, is_user_id, AGENT_ID_MAX, KEY_ID_MAX, RUN_ID_MAX,
+    TENANT_ID_MAX, USER_ID_MAX,
 };
 pub use install::{
-    add_principal, config_home, init_install, load_install, pin_server, reconcile_server,
-    registration_bundle, InitRequest, InstallConfig, PresentedServer, Principal,
-    RegistrationBundle, ServerPin, INSTALL_SCHEMA, REGISTER_SCHEMA,
+    add_user, config_home, ensure_local, init_install, load_install, pin_server, reconcile_server,
+    registration_bundle, InitRequest, InstallConfig, PresentedServer, RegistrationBundle,
+    ServerPin, User, INSTALL_SCHEMA, REGISTER_SCHEMA,
 };
 pub use key::{
     agent_dir, data_home, generate_agent_key, load_agent_key, revoke_key, rotate_agent_key,
@@ -67,5 +67,6 @@ pub use seal::{
     RUN_SCHEMA, RUN_VERSION, SEAL_ALG, SIGN_ALG,
 };
 pub use transport::{
-    interpret_rpc, parse_body, CallOutcome, HttpTransport, Transport, TransportError,
+    discover_server, interpret_rpc, parse_body, CallOutcome, HttpTransport, Transport,
+    TransportError,
 };
