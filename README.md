@@ -46,8 +46,6 @@ La sortie de `init` est le **bundle d'enregistrement**, sans graine privée :
 {
   "schema": "gb.register.v1",
   "tenant_id": "acme",
-  "principal_id": "p_alice",
-  "principals": [{ "principal_id": "p_alice", "display_name": "Alice Martin" }],
   "actor": "gb:acme:agent-box",
   "key_id": "gb-acme-agent-box-202610-1",
   "ed25519_public_key": "…",
@@ -56,6 +54,8 @@ La sortie de `init` est le **bundle d'enregistrement**, sans graine privée :
   "revoked_key_ids": []
 }
 ```
+
+Le user id et le nom d'affichage restent dans `install.json` sur la box. Ils n'entrent pas dans ce bundle. Le compte public est `gb.account_pub.v1`.
 
 Le bundle se redemande avec `cerveau register --tenant acme --agent agent-box`. L'opérateur du backend l'approuve de son côté. Ce dépôt ne contacte pas le backend pour ça.
 

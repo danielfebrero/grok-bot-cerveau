@@ -41,7 +41,9 @@ fn init_prints_a_registration_bundle_and_locks_the_key() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("gb.register.v1"));
     assert!(stdout.contains("tenant-cli"));
-    assert!(stdout.contains("p_cli"));
+    assert!(!stdout.contains("principal_id"));
+    assert!(!stdout.contains("p_cli"));
+    assert!(!stdout.contains("Cli Owner"));
     assert!(stdout.contains("gb:tenant-cli:agent-cli"));
     assert!(!stdout.contains("ed25519_seed"));
 

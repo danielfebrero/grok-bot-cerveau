@@ -49,8 +49,6 @@ pub struct InstallConfig {
 pub struct RegistrationBundle {
     pub schema: String,
     pub tenant_id: String,
-    pub principal_id: String,
-    pub principals: Vec<Principal>,
     pub actor: String,
     pub key_id: String,
     pub ed25519_public_key: String,
@@ -232,8 +230,6 @@ pub fn registration_bundle(
     Ok(RegistrationBundle {
         schema: REGISTER_SCHEMA.to_string(),
         tenant_id: tenant_id.to_string(),
-        principal_id,
-        principals: install.principals,
         actor: key.actor().to_string(),
         key_id: key.key_id().to_string(),
         ed25519_public_key: b64::encode(key.ed25519_public()),
