@@ -1,0 +1,41 @@
+{
+  "agent_ed25519_public_b64": "Qd9Jw5R2YS8EK2VVUV7mrQ5JIjxD1GTLTIXCoshRjw8=",
+  "agent_seed_hex": "e7272dc91c54471a6e38336b1bd8732d2fd0a546701cc595698788a84c566bfe",
+  "agent_x25519_public_b64": "t3/3volmq/2t5hmwoc515D2hrku4F/58D5ukU0+qI1I=",
+  "domain": "SHA-256(\"cerveau-public-test-vector-v1\\0\" || label)",
+  "ephemeral_hex": "cdbb18a105daf5caf5ddc2100ec9609d93a8f68b7594e4062932c23216a927a7",
+  "labels": {
+    "agent": "ed25519 seed",
+    "ephemeral": "unclamped X25519 ephemeral secret (the seal clamps it)",
+    "nonce": "first 12 bytes are the ChaCha20-Poly1305 nonce",
+    "recipient": "ed25519 seed, then libsodium/RFC 8032 SHA-512 clamp to the X25519 scalar"
+  },
+  "message": {
+    "agent": {
+      "actor": "gb:agent-test"
+    },
+    "enc": {
+      "alg": "x25519-hkdf-sha256-chacha20poly1305",
+      "ciphertext": "gGfiEYuXzt8cxxORZ25SsetMADjmjENvBAfFpxhpPqw5WMYw3Xnx1pndnRFZqP7EfVVM6Xd6J7XZA2k5IDz1MBOxZJLecmwqB2q22xwXXF1b/qy8QBwC0CRXJmR2shwTKJ6o0xWxDKmRo/vkihJ8fHSaE3uINgy4en8U/bBSqd8xtvERLgaMMXp4Iio9/Q672BeLLRoc3nexx7dkCBVv8PwZkQ7r/dDY0J/ppmx/2EMrHJqrZJdL5lMqoty0Vu6bT2400b/icpAs/7WqwzrhOpkFfvmDxIdEnrhHHAtnuAuO4YEmoj1VwSo9Xs0UN205BeT1tHfTdOa8NP92ET35VonQdvsQ9xgOERV6r+77vj7CDb/FeUrSKjTN9rjkYOhySYC+7da358O/yYS0805Nv0DbsLS6jsBhAOx6ZC3n/5ZhUFFU1IXhWIuGoGBqQYDGpeULhMb7BNeh0/qpJjFO4WBuJ/C0/2XsX6UwEcxNZLP9zmF+gjjNjOAhkqGg9hP0WO3KtWW/TKGv+OsYlVSLy8/DPmy+cgoj9fsu+6PLbCMe78/eNl35Lw1Xiai+L1oRZrFbf+FpfdKyWutF8Xlf1KCHwSk4jNS/buwlVr5WgJtmrqQ1BcCns4hWkrNwLQxVpRHYjCsDbJZqQAn1k/tye5of39Y3vKqsX7NKamJl3sdbT/sQWQIADt0Nn9e+wqJ6HLkFX7oE6igKiQdFZVBvznV8uucH7ihLdjOz/+F/137cKEZgekrhlfzQu4QfsF2UPmAnRg5bRJHLKSzDAogY8dSmzUKSZD3zLgxaHAicPmPrO1oGTGcCMR8nQX2aWtctdGIKkIiJ2FBAS4npLb70YduBCmpYRwM3hMvC//8DN2l9JQ==",
+      "epk": "go/SZCV0BGfJdnRWmOAAlNzhXJmfm/EjVFvFLk5BW24=",
+      "nonce": "VnseuAKQld5djdit",
+      "recipient_key_id": "cerveau-test"
+    },
+    "key_id": "gb-agent-test-202610",
+    "replay": false,
+    "run_id": "run_VECTOR",
+    "schema": "gb.run.v1",
+    "sent_at": "2026-10-22T15:44:58Z",
+    "seq": 7,
+    "sig": {
+      "alg": "ed25519",
+      "signed": "ece589b880dfa4ad4d1474e2f2357ddcbe11fffaad1b8df26baefe4c91c89123",
+      "value": "2/cyIy8wkR+gW/lEgO/gyWPWhNIL5RhPaUFOi/G1kPJH5L1BQH2c/FgXMiaGeJg0Wj2IDVW0JG33TbcxUO4OCg=="
+    }
+  },
+  "nonce_hex": "567b1eb8029095de5d8dd8ad",
+  "note": "Public test vector. These keys are fixtures derived from public labels, not secrets.",
+  "plaintext": "{\"decisions\":[],\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v1\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"dani\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"dani\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
+  "recipient_seed_hex": "ed787450fd1a2cb80b9acd0adda9b86bf7db89a13579b1495e2c08dfd2e038f3",
+  "recipient_x25519_public_b64": "X/UDENPFfVZCGlmglzB2l8KgfIbwmzl954LwEUtJxh8="
+}
