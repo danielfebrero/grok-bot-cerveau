@@ -35,8 +35,8 @@ pub enum ConfigError {
     Tool,
     #[error("tenant id is not an ASCII token of [A-Za-z0-9_-]")]
     Tenant,
-    #[error("principal id is not an ASCII token of [A-Za-z0-9_-]")]
-    Principal,
+    #[error("user id is not an ASCII token of [A-Za-z0-9_-]")]
+    User,
     #[error("display name is empty or contains control characters")]
     DisplayName,
     #[error("this install is already initialized")]
@@ -45,9 +45,7 @@ pub enum ConfigError {
     NotFound,
     #[error("the pinned server key does not match the one presented")]
     ServerKeyMismatch,
-    #[error(
-        "the server key is not pinned; pass it to init or pin, or set CERVEAU_TRUST_ON_FIRST_USE=1"
-    )]
+    #[error("the server key is not pinned yet")]
     ServerUnpinned,
     #[error("install file is inconsistent")]
     Corrupt,
@@ -63,8 +61,8 @@ pub struct ClientConfig {
     pub data_dir: PathBuf,
     pub tenant_id: String,
     pub agent_id: String,
-    pub principal_id: String,
-    pub principals: Vec<String>,
+    pub user_id: String,
+    pub users: Vec<String>,
     pub recipient_key_id: String,
     pub recipient_public: [u8; 32],
     pub signing_key_id: Option<String>,
@@ -83,7 +81,7 @@ impl std::fmt::Debug for ClientConfig {
             .field("data_dir", &self.data_dir)
             .field("tenant_id", &self.tenant_id)
             .field("agent_id", &self.agent_id)
-            .field("principal_id", &self.principal_id)
+            .field("user_id", &self.user_id)
             .field("recipient_key_id", &self.recipient_key_id)
             .field("signing_key_id", &self.signing_key_id)
             .field("endpoint", &self.endpoint)
@@ -104,14 +102,14 @@ impl ClientConfig {
     pub fn from_env(
         tenant_id: impl Into<String>,
         agent_id: impl Into<String>,
-        principal_id: Option<String>,
+        user_id: Option<String>,
         config_dir: PathBuf,
         data_dir: PathBuf,
     ) -> Result<Self, ConfigError> {
         crate::install::client_config_from_env(
             tenant_id.into(),
             agent_id.into(),
-            principal_id,
+            user_id,
             config_dir,
             data_dir,
         )
@@ -173,8 +171,8 @@ pub enum ClientError {
     Seq,
     #[error("run_id is not [A-Za-z0-9_-] within the length bound")]
     RunId,
-    #[error("principal is not configured for this install")]
-    Principal,
+    #[error("user is not configured for this install")]
+    User,
     #[error("account key: {0}")]
     Account(#[from] AccountError),
 }
@@ -288,16 +286,11 @@ impl<T: Transport + 'static> Client<T> {
             &self.config.tenant_id,
             &self.config.agent_id,
         )?;
-        if input.principal_id.is_empty() {
-            input.principal_id = self.config.principal_id.clone();
+        if input.user_id.is_empty() {
+            input.user_id = self.config.user_id.clone();
         }
-        if !self
-            .config
-            .principals
-            .iter()
-            .any(|id| id == &input.principal_id)
-        {
-            return Err(ClientError::Principal);
+        if !self.config.users.iter().any(|id| id == &input.user_id) {
+            return Err(ClientError::User);
         }
         input.tenant_id = self.config.tenant_id.clone();
         let (store, mut state) = load_queue_state(&self.config.data_dir, &key)?;
@@ -307,13 +300,13 @@ impl<T: Transport + 'static> Client<T> {
         let seq = state.next_seq;
         let run_id = new_run_id()?;
         let sent_at = now_rfc3339();
-        let principal_id = input.principal_id.clone();
+        let user_id = input.user_id.clone();
         let body = prepare_body(input)?;
         state.records.push(QueuedRun {
             run_id: run_id.clone(),
             seq,
             sent_at,
-            principal_id,
+            user_id,
             body,
         });
         state.next_seq = seq + 1;
@@ -477,11 +470,11 @@ impl<T: Transport + 'static> Client<T> {
         record: &QueuedRun,
         replay: bool,
     ) -> Result<RunMessage, ClientError> {
-        let account = self.account_key(&record.principal_id)?;
+        let account = self.account_key(&record.user_id)?;
         Ok(seal_run(SealRequest {
             body: &record.body,
             tenant_id: &self.config.tenant_id,
-            principal_id: &record.principal_id,
+            user_id: &record.user_id,
             run_id: &record.run_id,
             seq: record.seq,
             sent_at: &record.sent_at,
@@ -706,8 +699,8 @@ mod tests {
                 data_dir: self.home.clone(),
                 tenant_id: "tenant-test".into(),
                 agent_id: "agent-test".into(),
-                principal_id: "p_owner".into(),
-                principals: vec!["p_owner".into()],
+                user_id: "p_owner".into(),
+                users: vec!["p_owner".into()],
                 recipient_key_id: "cerveau-test".into(),
                 recipient_public: self.recipient_public,
                 signing_key_id: Some("cerveau-test".into()),
@@ -744,7 +737,7 @@ mod tests {
     fn input(text: &str) -> RunInput {
         RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: text.into(),
             messages: vec![TurnMessage {
                 origin: MessageOrigin::Human { claimed_from: None },
@@ -935,7 +928,7 @@ mod tests {
             let message: RunMessage = serde_json::from_str(&call.wire).unwrap();
             assert!(serde_json::from_str::<serde_json::Value>(&call.wire)
                 .unwrap()
-                .get("principal_id")
+                .get("user_id")
                 .is_none());
             let account = message.account.as_ref().expect("account proof");
             assert_eq!(account.key_id, public.key_id);

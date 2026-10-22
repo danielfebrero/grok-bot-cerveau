@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::body::RunBody;
 use crate::crypto::{self, aead_open, aead_seal, hkdf_sha256};
-use crate::id::{is_principal_id, is_run_id};
+use crate::id::{is_run_id, is_user_id};
 use crate::key::AgentKey;
 use crate::util::{self, ensure_private};
 use fs2::FileExt;
@@ -32,7 +32,7 @@ pub(crate) struct QueuedRun {
     pub run_id: String,
     pub seq: u64,
     pub sent_at: String,
-    pub principal_id: String,
+    pub user_id: String,
     pub body: RunBody,
 }
 
@@ -112,15 +112,15 @@ impl QueueStore {
             if record.seq == 0 || record.seq >= disk.next_seq {
                 return Err(QueueError::Corrupt);
             }
-            if !is_run_id(&record.run_id) || !is_principal_id(&record.principal_id) {
+            if !is_run_id(&record.run_id) || !is_user_id(&record.user_id) {
                 return Err(QueueError::Corrupt);
             }
             if record.body.tenant_id != disk.tenant_id {
                 return Err(QueueError::Corrupt);
             }
-            if record.body.principal_id.is_empty() {
-                record.body.principal_id = record.principal_id.clone();
-            } else if record.body.principal_id != record.principal_id {
+            if record.body.user_id.is_empty() {
+                record.body.user_id = record.user_id.clone();
+            } else if record.body.user_id != record.user_id {
                 return Err(QueueError::Corrupt);
             }
             if !seen_seq.insert(record.seq) || !seen_run.insert(record.run_id.clone()) {
@@ -227,7 +227,7 @@ mod tests {
     fn queued(seq: u64, marker: &str) -> QueuedRun {
         let body = prepare_body(RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: marker.to_string(),
             ..RunInput::default()
         })
@@ -236,7 +236,7 @@ mod tests {
             run_id: format!("run_SEQ{seq}"),
             seq,
             sent_at: "2026-10-22T15:44:58Z".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             body,
         }
     }

@@ -14,7 +14,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::b64;
-use crate::id::{is_key_id, is_principal_id, is_tenant_id};
+use crate::id::{is_key_id, is_tenant_id, is_user_id};
 use crate::util::{self, ensure_private};
 
 pub const ACCOUNT_KEY_SCHEMA: &str = "gb.account_key.v1";
@@ -93,7 +93,7 @@ impl AccountKey {
         if !is_tenant_id(tenant_id) {
             return Err(AccountError::Tenant);
         }
-        if !is_principal_id(user_id) {
+        if !is_user_id(user_id) {
             return Err(AccountError::User);
         }
         if !is_key_id(key_id) {
@@ -191,7 +191,7 @@ fn account_key_id(
     if !is_tenant_id(tenant_id) {
         return Err(AccountError::Tenant);
     }
-    if !is_principal_id(user_id) {
+    if !is_user_id(user_id) {
         return Err(AccountError::User);
     }
     let key_id = format!("compte-{tenant_id}-{user_id}-{}-1", created.format("%Y%m"));
@@ -205,7 +205,7 @@ fn account_path(data_dir: &Path, tenant_id: &str, user_id: &str) -> Result<PathB
     if !is_tenant_id(tenant_id) {
         return Err(AccountError::Tenant);
     }
-    if !is_principal_id(user_id) {
+    if !is_user_id(user_id) {
         return Err(AccountError::User);
     }
     Ok(data_dir

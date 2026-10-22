@@ -12,7 +12,9 @@
   },
   "message": {
     "agent": {
-      "actor": "gb:tenant-test:agent-test"
+      "actor": "gb:tenant-test:agent-test",
+      "ed25519_public_key": "Qd9Jw5R2YS8EK2VVUV7mrQ5JIjxD1GTLTIXCoshRjw8=",
+      "x25519_public_key": "t3/3volmq/2t5hmwoc515D2hrku4F/58D5ukU0+qI1I="
     },
     "enc": {
       "alg": "x25519-hkdf-sha256-chacha20poly1305",
@@ -36,7 +38,7 @@
     "version": 3
   },
   "nonce_hex": "567b1eb8029095de5d8dd8ad",
-  "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no principal_id.",
+  "note": "Public test vector for gb.run.v1 version 3. These keys are fixtures derived from public labels, not secrets. The signature covers version, tenant_id, replay, and actor. The packet has no user_id.",
   "plaintext": "{\"decisions\":[],\"redaction\":{\"applied\":true,\"hits\":[\"hex\"],\"truncated\":false},\"schema\":\"gb.run.body.v2\",\"tenant_id\":\"tenant-test\",\"tool_results\":[],\"transcript\":\"commit [REDACTED:hex] ok\",\"transcript_delta\":[{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"role\":\"user\",\"text\":\"bonjour\",\"untrusted_user_input\":false},{\"from\":\"gb:other\",\"role\":\"agent\",\"text\":\"relai\",\"untrusted_user_input\":true},{\"from\":\"x:mention\",\"role\":\"inbound\",\"text\":\"externe\",\"untrusted_user_input\":true},{\"from\":\"shell\",\"role\":\"tool\",\"text\":\"ok\",\"untrusted_user_input\":false}],\"trigger\":{\"at\":\"2026-10-22T15:44:58Z\",\"from\":\"p_owner\",\"kind\":\"user_message\",\"text\":\"bonjour\",\"untrusted_user_input\":false}}",
   "recipient_seed_hex": "ed787450fd1a2cb80b9acd0adda9b86bf7db89a13579b1495e2c08dfd2e038f3",
   "recipient_x25519_public_b64": "X/UDENPFfVZCGlmglzB2l8KgfIbwmzl954LwEUtJxh8="

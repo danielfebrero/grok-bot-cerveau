@@ -690,7 +690,7 @@ mod tests {
         let store = QueueStore::acquire(&dir).unwrap();
         let body = prepare_body(RunInput {
             tenant_id: "tenant-test".into(),
-            principal_id: "p_owner".into(),
+            user_id: "p_owner".into(),
             transcript: "keep-me".into(),
             ..RunInput::default()
         })
@@ -701,7 +701,7 @@ mod tests {
                 run_id: "run_KEEP".into(),
                 seq: 3,
                 sent_at: "2026-10-22T15:44:58Z".into(),
-                principal_id: "p_owner".into(),
+                user_id: "p_owner".into(),
                 body,
             }],
         };

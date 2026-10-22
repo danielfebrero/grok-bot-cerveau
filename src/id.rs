@@ -8,8 +8,8 @@ pub const KEY_ID_MAX: usize = 160;
 pub const AGENT_ID_MAX: usize = 64;
 /// Maximum length of a tenant id, in bytes.
 pub const TENANT_ID_MAX: usize = 64;
-/// Maximum length of a principal id, in bytes.
-pub const PRINCIPAL_ID_MAX: usize = 64;
+/// Maximum length of a user id, in bytes.
+pub const USER_ID_MAX: usize = 64;
 
 /// ASCII token: non-empty, at most `max` bytes, charset `[A-Za-z0-9_-]`.
 pub fn is_token(value: &str, max: usize) -> bool {
@@ -32,8 +32,8 @@ pub fn is_tenant_id(value: &str) -> bool {
     is_token(value, TENANT_ID_MAX)
 }
 
-pub fn is_principal_id(value: &str) -> bool {
-    is_token(value, PRINCIPAL_ID_MAX)
+pub fn is_user_id(value: &str) -> bool {
+    is_token(value, USER_ID_MAX)
 }
 
 pub(crate) fn is_agent_id(value: &str) -> bool {
@@ -88,9 +88,9 @@ mod tests {
         assert!(is_run_id("run_01HZABCDEFGHJKMNPQRSTVWXYZ"));
         assert!(is_key_id("gb-tenant-test-agent-test-202610-1"));
         assert!(is_tenant_id("tenant-test"));
-        assert!(is_principal_id("p_owner"));
+        assert!(is_user_id("p_owner"));
         assert!(!is_tenant_id("tenant.test"));
-        assert!(!is_principal_id("p owner"));
+        assert!(!is_user_id("p owner"));
         assert!(is_key_id(&"a".repeat(KEY_ID_MAX)));
         assert!(!is_run_id(""));
         assert!(!is_run_id("run id"));
