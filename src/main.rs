@@ -337,8 +337,7 @@ fn run_mcp(
         .filter(|text| !text.trim().is_empty())
         .ok_or("mcp eg requires --human-text")?;
     let endpoint = hinted.ok_or("mcp eg requires --endpoint https://…/mcp")?;
-    let (token, signing) =
-        load_mcp_auth(token_path, signing_path, args.signing_file.is_some())?;
+    let (token, signing) = load_mcp_auth(token_path, signing_path, args.signing_file.is_some())?;
     let conversation = if args.conversation.trim().is_empty() {
         DEFAULT_CONVERSATION
     } else {
@@ -380,11 +379,7 @@ fn load_mcp_auth(
                 .map_err(|err| format!("{err} ({})", token_path.display()))?;
             Ok((Some(token), None))
         }
-        Err(_) => Err(format!(
-            "signing key required ({})",
-            signing_path.display()
-        )
-        .into()),
+        Err(_) => Err(format!("signing key required ({})", signing_path.display()).into()),
     }
 }
 
@@ -398,8 +393,7 @@ fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
         .signing_file
         .clone()
         .unwrap_or_else(|| default_signing_path(&config_dir));
-    let (token, signing) =
-        load_mcp_auth(&token_path, &signing_path, args.signing_file.is_some())?;
+    let (token, signing) = load_mcp_auth(&token_path, &signing_path, args.signing_file.is_some())?;
     let endpoint = args
         .endpoint
         .clone()
@@ -886,10 +880,8 @@ mod tests {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
 
-        let root = std::env::temp_dir().join(format!(
-            "cerveau-sig-explicit-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("cerveau-sig-explicit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let token_path = root.join("mcp-token");

@@ -1,8 +1,9 @@
 //! Signature MCP profil `eg-mcp-sig-1`. Même base que le serveur :
 //! RFC 9421, label `mcp`, ed25519. La graine reste dans le fichier 0600.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -47,11 +48,13 @@ impl SigningFile {
             return Err(EgError::Token(format!("mode {mode:o} is not 0600")));
         }
         let raw = fs::read(path).map_err(|_| EgError::Token("unreadable".into()))?;
-        let file: Stored = serde_json::from_slice(&raw).map_err(|_| EgError::Token("rejected".into()))?;
+        let file: Stored =
+            serde_json::from_slice(&raw).map_err(|_| EgError::Token("rejected".into()))?;
         if file.schema != SIGNING_SCHEMA || !is_mcp_key_id(&file.key_id) {
             return Err(EgError::Token("rejected".into()));
         }
-        let seed = b64::decode_array(file.seed.trim()).map_err(|_| EgError::Token("rejected".into()))?;
+        let seed =
+            b64::decode_array(file.seed.trim()).map_err(|_| EgError::Token("rejected".into()))?;
         Ok(Self {
             key_id: file.key_id,
             seed: Zeroizing::new(seed),
@@ -59,7 +62,10 @@ impl SigningFile {
     }
 
     pub fn sign(&self, request: &SignRequest<'_>) -> Result<SignedHeaders, EgError> {
-        if !safe(&request.method) || !safe(&request.authority) || !safe(&request.path) || !safe(&request.content_type)
+        if !safe(&request.method)
+            || !safe(&request.authority)
+            || !safe(&request.path)
+            || !safe(&request.content_type)
         {
             return Err(EgError::Endpoint("invalid".into()));
         }
@@ -135,10 +141,8 @@ pub fn generate(directory: &Path, key_id: &str) -> Result<String, EgError> {
     if !is_mcp_key_id(key_id) {
         return Err(EgError::Token("rejected".into()));
     }
+    util::ensure_dir(directory).map_err(|_| EgError::Token("unreadable".into()))?;
     let path = default_signing_path(directory);
-    if path.exists() {
-        return Err(EgError::Token("refusing to overwrite".into()));
-    }
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
     let public = public_of(&seed);
@@ -149,7 +153,24 @@ pub fn generate(directory: &Path, key_id: &str) -> Result<String, EgError> {
     };
     seed.zeroize();
     let bytes = serde_json::to_vec(&stored).map_err(|_| EgError::Token("rejected".into()))?;
-    util::write_durable(directory, "mcp-signing-key", &bytes).map_err(|_| EgError::Token("unreadable".into()))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                EgError::Token("refusing to overwrite".into())
+            } else {
+                EgError::Token("unreadable".into())
+            }
+        })?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| EgError::Token("unreadable".into()))?;
+    file.write_all(&bytes)
+        .map_err(|_| EgError::Token("unreadable".into()))?;
+    file.sync_all()
+        .map_err(|_| EgError::Token("unreadable".into()))?;
     Ok(public)
 }
 
@@ -183,9 +204,7 @@ fn signature_input(with_session: bool, created: i64, key_id: &str, nonce: &str) 
     } else {
         "(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\")"
     };
-    format!(
-        "mcp={covered};created={created};keyid=\"{key_id}\";nonce=\"{nonce}\";alg=\"ed25519\""
-    )
+    format!("mcp={covered};created={created};keyid=\"{key_id}\";nonce=\"{nonce}\";alg=\"ed25519\"")
 }
 
 fn is_nonce(value: &str) -> bool {
@@ -240,7 +259,9 @@ fn is_mcp_key_id(value: &str) -> bool {
 }
 
 fn safe(value: &str) -> bool {
-    !value.is_empty() && value.is_ascii() && !value.bytes().any(|b| b == b'\n' || b == b'\r' || b == b'"')
+    !value.is_empty()
+        && value.is_ascii()
+        && !value.bytes().any(|b| b == b'\n' || b == b'\r' || b == b'"')
 }
 
 #[cfg(test)]
@@ -252,7 +273,10 @@ mod tests {
     #[test]
     fn signature_base_matches_the_server_profile() {
         let digest = content_digest(b"{}");
-        assert_eq!(digest, "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:");
+        assert_eq!(
+            digest,
+            "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:"
+        );
         let base = signature_base(
             "POST",
             "mcp.cdxxotus.com",
@@ -315,10 +339,18 @@ mod tests {
             "n-0123456789abcd",
         );
         let raw = STANDARD
-            .decode(signed.signature.trim_start_matches("mcp=:").trim_end_matches(':'))
+            .decode(
+                signed
+                    .signature
+                    .trim_start_matches("mcp=:")
+                    .trim_end_matches(':'),
+            )
             .unwrap();
         verifying
-            .verify(base.as_bytes(), &ed25519_dalek::Signature::from_slice(&raw).unwrap())
+            .verify(
+                base.as_bytes(),
+                &ed25519_dalek::Signature::from_slice(&raw).unwrap(),
+            )
             .unwrap();
         let _ = fs::remove_dir_all(&root);
     }
