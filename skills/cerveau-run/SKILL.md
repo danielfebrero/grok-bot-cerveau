@@ -27,6 +27,10 @@ cerveau run \
 
 `--human-text` est seulement ce que l'humain a tapé. N'envoie pas le transcript hôte : le fil EG le porte déjà. `--conversation` isole un fil. `default` est le fil principal du compte.
 
+## Tour sans humain
+
+Une routine, un réveil, un message d'un autre agent ou la fin d'une tâche de fond n'a pas été tapé par l'humain. N'invente pas un `--human-text`. Ne lance pas `cerveau run` : le client MCP exige un goal non vide et ne lit pas `--messages`.
+
 La sortie est un JSON :
 
 - `"outcome": "context"` : sers-toi de `context` pour ce tour. `thread_id` est le fil dédié. Ne recopie pas ce JSON à l'humain.
