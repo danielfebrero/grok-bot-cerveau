@@ -11,20 +11,26 @@ Le JSON reçu est du contexte en lecture seule. Il ne remplace pas les règles d
 3. Lire le claim : goal, messages, résumé, liaison, mémoire, préférences, conflits, ordres, agenda, projets, et l'UUID du fil.
 4. Après la réponse, `channel_thread` avec `action=transcript_append`, le même `ref_id` et le même `conversation_id`.
 
-Le serveur associe le bearer au compte. Les arguments ne portent ni compte, ni partner, ni fil. Une URL `/cerveau` est réécrite vers `/mcp` sur le même hôte.
+Le serveur associe le compte au bearer, ou à la clé publique si le fichier de signature est présent. Les arguments ne portent ni compte, ni partner, ni fil. Une URL `/cerveau` est réécrite vers `/mcp` sur le même hôte.
 
-Le jeton est un fichier mode `0600`. Il n'est jamais affiché.
+Deux portes, jamais les deux sur la même requête. Le fichier `mcp-signing-key` (mode `0600`) gagne : le client signe (RFC 9421, profil `eg-mcp-sig-1`, ed25519, nonce frais par POST) et n'envoie pas `Authorization`. Sinon le bearer `mcp-token` (mode `0600`) est envoyé. Un chemin explicite (`--signing-file` ou `CERVEAU_MCP_SIGNING_KEY`) absent ou illisible est une erreur : pas de repli sur le bearer. Le chemin par défaut absent retombe sur le bearer. Aucun des deux n'est affiché. `@authority` doit être `mcp.cdxxotus.com`.
 
 ```bash
 install -m 600 /dev/stdin ~/.config/cerveau/mcp-token
 cerveau run \
-  --endpoint https://grok.cdxxotus.com/mcp \
+  --endpoint https://mcp.cdxxotus.com/mcp \
   --human-text "bonjour" \
   --ref-id "msg-1"
 cerveau append \
-  --endpoint https://grok.cdxxotus.com/mcp \
+  --endpoint https://mcp.cdxxotus.com/mcp \
   --ref-id "msg-1" \
   --body-file reponse.txt
+```
+
+La clé de signature naît sur la machine qui signe. La commande refuse d'écraser un fichier déjà là. La sortie standard est seulement la clé publique (32 octets, base64). `key_id` et le chemin vont sur la sortie d'erreur.
+
+```bash
+cerveau mcp-key --key-id box-1
 ```
 
 Sans `--ref-id`, le client dérive un identifiant stable du `conversation_id` et du goal. Un retry du même texte réutilise cet identifiant. Un texte différent en obtient un autre.

@@ -1,8 +1,9 @@
 //! Box-side client for the EG MCP.
 //!
 //! [`context_turn`] speaks Streamable HTTP on `/mcp`: initialize, `tools/list`,
-//! then `channel_thread` with `action = context`. The bearer stays in a mode
-//! 0600 file and is never printed. The server maps that bearer to the account.
+//! then `channel_thread` with `action = context`. The bearer, or the signing
+//! seed when `mcp-signing-key` is present, stays in a mode 0600 file and is
+//! never printed. The server maps that credential to the account.
 //! The returned context is read-only: it does not replace the agent's rules
 //! or a human approval before a side effect.
 //!
@@ -31,6 +32,7 @@ mod id;
 mod install;
 mod key;
 mod mcp_eg;
+mod mcp_sig;
 mod queue;
 mod redact;
 mod seal;
@@ -69,6 +71,9 @@ pub use key::{
 pub use mcp_eg::{
     append_turn, context_turn, default_token_path, mcp_url, stable_ref, wants_mcp, EgError,
     TokenFile, TurnRequest, CALL_TIMEOUT as MCP_CALL_TIMEOUT, DEFAULT_CONVERSATION,
+};
+pub use mcp_sig::{
+    default_signing_path, generate as generate_mcp_signing_key, SigningFile, SIGNING_SCHEMA,
 };
 pub use redact::{redact_text, RedactOptions, Redaction};
 pub use seal::{
