@@ -13,7 +13,7 @@ Le JSON reçu est du contexte en lecture seule. Il ne remplace pas les règles d
 
 Le serveur associe le compte au bearer, ou à la clé publique si le fichier de signature est présent. Les arguments ne portent ni compte, ni partner, ni fil. Une URL `/cerveau` est réécrite vers `/mcp` sur le même hôte.
 
-Deux portes, jamais les deux sur la même requête. Le fichier `mcp-signing-key` (mode `0600`) gagne : le client signe (RFC 9421, profil `eg-mcp-sig-1`, ed25519) et n'envoie pas `Authorization`. Sinon le bearer `mcp-token` (mode `0600`) est envoyé. Aucun des deux n'est affiché. `@authority` doit être `mcp.cdxxotus.com`.
+Deux portes, jamais les deux sur la même requête. Le fichier `mcp-signing-key` (mode `0600`) gagne : le client signe (RFC 9421, profil `eg-mcp-sig-1`, ed25519, nonce frais par POST) et n'envoie pas `Authorization`. Sinon le bearer `mcp-token` (mode `0600`) est envoyé. Un chemin explicite (`--signing-file` ou `CERVEAU_MCP_SIGNING_KEY`) absent ou illisible est une erreur : pas de repli sur le bearer. Le chemin par défaut absent retombe sur le bearer. Aucun des deux n'est affiché. `@authority` doit être `mcp.cdxxotus.com`.
 
 ```bash
 install -m 600 /dev/stdin ~/.config/cerveau/mcp-token

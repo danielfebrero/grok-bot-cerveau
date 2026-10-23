@@ -172,7 +172,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&server)?);
         }
         Cmd::Run(args) => {
-            if args.sealed && args.mcp {
+            if args.sealed && (args.mcp || args.signing_file.is_some()) {
                 return Err("choose either --sealed or --mcp".into());
             }
             let config_dir = config_dir(args.scope.paths.config_dir.clone())?;
@@ -188,7 +188,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .endpoint
                 .clone()
                 .or_else(|| stored_endpoint(&config_dir, &args.scope.tenant));
-            if !args.sealed && wants_mcp(hinted.as_deref(), &token_path, &signing_path, args.mcp)
+            if !args.sealed
+                && (args.signing_file.is_some()
+                    || wants_mcp(hinted.as_deref(), &token_path, &signing_path, args.mcp))
             {
                 run_mcp(&args, &token_path, &signing_path, hinted)?;
             } else {
@@ -335,7 +337,8 @@ fn run_mcp(
         .filter(|text| !text.trim().is_empty())
         .ok_or("mcp eg requires --human-text")?;
     let endpoint = hinted.ok_or("mcp eg requires --endpoint https://…/mcp")?;
-    let (token, signing) = load_mcp_auth(token_path, signing_path)?;
+    let (token, signing) =
+        load_mcp_auth(token_path, signing_path, args.signing_file.is_some())?;
     let conversation = if args.conversation.trim().is_empty() {
         DEFAULT_CONVERSATION
     } else {
@@ -359,19 +362,30 @@ fn run_mcp(
     Ok(())
 }
 
-/// Le fichier de signature gagne. Le bearer n'est pas lu dans ce cas.
+/// Un chemin de signature explicite exige le fichier. Un chemin absent par
+/// défaut retombe sur le bearer. Une erreur de stat ne lit pas le bearer.
 fn load_mcp_auth(
     token_path: &Path,
     signing_path: &Path,
+    explicit: bool,
 ) -> Result<(Option<TokenFile>, Option<SigningFile>), Box<dyn std::error::Error>> {
-    if signing_path.is_file() {
-        let signing = SigningFile::load(signing_path)
-            .map_err(|err| format!("{err} ({})", signing_path.display()))?;
-        return Ok((None, Some(signing)));
+    match std::fs::symlink_metadata(signing_path) {
+        Ok(_) => {
+            let signing = SigningFile::load(signing_path)
+                .map_err(|err| format!("{err} ({})", signing_path.display()))?;
+            Ok((None, Some(signing)))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !explicit => {
+            let token = TokenFile::load(token_path)
+                .map_err(|err| format!("{err} ({})", token_path.display()))?;
+            Ok((Some(token), None))
+        }
+        Err(_) => Err(format!(
+            "signing key required ({})",
+            signing_path.display()
+        )
+        .into()),
     }
-    let token =
-        TokenFile::load(token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
-    Ok((Some(token), None))
 }
 
 fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -384,7 +398,8 @@ fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
         .signing_file
         .clone()
         .unwrap_or_else(|| default_signing_path(&config_dir));
-    let (token, signing) = load_mcp_auth(&token_path, &signing_path)?;
+    let (token, signing) =
+        load_mcp_auth(&token_path, &signing_path, args.signing_file.is_some())?;
     let endpoint = args
         .endpoint
         .clone()
@@ -772,8 +787,9 @@ struct RunArgs {
     /// Ignored when the signing key file is present.
     #[arg(long, env = "CERVEAU_MCP_TOKEN_FILE")]
     token_file: Option<PathBuf>,
-    /// Ed25519 seed file, mode 0600. When present, the request is signed and
-    /// no Authorization header is sent.
+    /// Ed25519 seed file, mode 0600. When this path is set, it must exist:
+    /// a typo does not fall back to the bearer. When the file is present,
+    /// the request is signed and no Authorization header is sent.
     #[arg(long, env = "CERVEAU_MCP_SIGNING_KEY")]
     signing_file: Option<PathBuf>,
     /// Force the EG MCP loop.
@@ -862,6 +878,56 @@ mod tests {
             text.contains("No such file") || text.contains("os error 2"),
             "{text}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn explicit_missing_signing_path_does_not_return_the_bearer() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "cerveau-sig-explicit-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let token_path = root.join("mcp-token");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .mode(0o600)
+                .open(&token_path)
+                .unwrap();
+            writeln!(file, "bearer-test-value1").unwrap();
+        }
+        let missing = root.join("no-such-key");
+        let err = match load_mcp_auth(&token_path, &missing, true) {
+            Err(err) => err,
+            Ok(_) => panic!("explicit missing path returned a credential"),
+        };
+        let text = err.to_string();
+        assert!(!text.contains("bearer-test-value1"), "{text}");
+        assert!(text.contains("signing key required"), "{text}");
+
+        let (token, signing) = load_mcp_auth(&token_path, &missing, false).unwrap();
+        assert!(token.is_some());
+        assert!(signing.is_none());
+
+        let link = root.join("broken-link");
+        std::os::unix::fs::symlink(root.join("absent-target"), &link).unwrap();
+        let link_err = match load_mcp_auth(&token_path, &link, true) {
+            Err(err) => err,
+            Ok(_) => panic!("broken symlink returned a credential"),
+        };
+        assert!(!link_err.to_string().contains("bearer-test-value1"));
+
+        let dir_err = match load_mcp_auth(&token_path, &root, true) {
+            Err(err) => err,
+            Ok(_) => panic!("directory returned a credential"),
+        };
+        assert!(!dir_err.to_string().contains("bearer-test-value1"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

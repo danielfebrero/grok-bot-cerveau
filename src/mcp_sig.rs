@@ -68,8 +68,18 @@ impl SigningFile {
                 return Err(EgError::Endpoint("invalid".into()));
             }
         }
+        let nonce = match request.nonce {
+            Some(value) if is_nonce(value) => value.to_string(),
+            Some(_) => return Err(EgError::Endpoint("invalid".into())),
+            None => fresh_nonce(),
+        };
         let digest = content_digest(request.body);
-        let input = signature_input(request.session_id.is_some(), request.created, &self.key_id);
+        let input = signature_input(
+            request.session_id.is_some(),
+            request.created,
+            &self.key_id,
+            &nonce,
+        );
         let base = signature_base(
             request.method,
             request.authority,
@@ -79,6 +89,7 @@ impl SigningFile {
             request.session_id,
             request.created,
             &self.key_id,
+            &nonce,
         );
         let key = SigningKey::from_bytes(&self.seed);
         let sig = key.sign(base.as_bytes());
@@ -98,6 +109,8 @@ pub struct SignRequest<'a> {
     pub body: &'a [u8],
     pub session_id: Option<&'a str>,
     pub created: i64,
+    /// Absent : nonce frais à chaque signature. Présent : 16 à 64 caractères `[A-Za-z0-9_-]`.
+    pub nonce: Option<&'a str>,
 }
 
 pub struct SignedHeaders {
@@ -164,13 +177,35 @@ fn content_digest(body: &[u8]) -> String {
     format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(body)))
 }
 
-fn signature_input(with_session: bool, created: i64, key_id: &str) -> String {
+fn signature_input(with_session: bool, created: i64, key_id: &str, nonce: &str) -> String {
     let covered = if with_session {
         "(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\" \"mcp-session-id\")"
     } else {
         "(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\")"
     };
-    format!("mcp={covered};created={created};keyid=\"{key_id}\";alg=\"ed25519\"")
+    format!(
+        "mcp={covered};created={created};keyid=\"{key_id}\";nonce=\"{nonce}\";alg=\"ed25519\""
+    )
+}
+
+fn is_nonce(value: &str) -> bool {
+    let n = value.len();
+    (16..=64).contains(&n)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn fresh_nonce() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(32);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    out
 }
 
 fn signature_base(
@@ -182,6 +217,7 @@ fn signature_base(
     session: Option<&str>,
     created: i64,
     key_id: &str,
+    nonce: &str,
 ) -> String {
     let mut lines = vec![
         format!("\"@method\": {method}"),
@@ -193,7 +229,7 @@ fn signature_base(
     if let Some(session) = session {
         lines.push(format!("\"mcp-session-id\": {session}"));
     }
-    let params = signature_input(session.is_some(), created, key_id);
+    let params = signature_input(session.is_some(), created, key_id, nonce);
     let params = params.trim_start_matches("mcp=");
     lines.push(format!("\"@signature-params\": {params}"));
     lines.join("\n")
@@ -226,10 +262,11 @@ mod tests {
             None,
             1_760_000_000,
             "box-test",
+            "n-0123456789abcd",
         );
         assert_eq!(
             base,
-            "\"@method\": POST\n\"@authority\": mcp.cdxxotus.com\n\"@path\": /mcp\n\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:\n\"content-type\": application/json\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\");created=1760000000;keyid=\"box-test\";alg=\"ed25519\""
+            "\"@method\": POST\n\"@authority\": mcp.cdxxotus.com\n\"@path\": /mcp\n\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:\n\"content-type\": application/json\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\");created=1760000000;keyid=\"box-test\";nonce=\"n-0123456789abcd\";alg=\"ed25519\""
         );
     }
 
@@ -256,6 +293,7 @@ mod tests {
                 body: b"{}",
                 session_id: None,
                 created: 1_760_000_000,
+                nonce: Some("n-0123456789abcd"),
             })
             .unwrap();
         assert!(signed.signature.starts_with("mcp=:"));
@@ -274,6 +312,7 @@ mod tests {
             None,
             1_760_000_000,
             "box-test",
+            "n-0123456789abcd",
         );
         let raw = STANDARD
             .decode(signed.signature.trim_start_matches("mcp=:").trim_end_matches(':'))

@@ -379,6 +379,7 @@ impl<'a> Session<'a> {
                     body: body.as_bytes(),
                     session_id: self.session_id.as_deref(),
                     created: crate::mcp_sig::unix_now(),
+                    nonce: None,
                 })?;
                 request = request
                     .set("Content-Digest", &signed.content_digest)
@@ -815,9 +816,15 @@ mod tests {
             assert!(lower.contains("signature-input:"));
             assert!(lower.contains("signature:"));
             assert!(req.contains("keyid=\"box-test\""));
+            assert!(req.contains("nonce=\""));
             assert!(req.contains("alg=\"ed25519\""));
             assert!(!req.contains(&public));
         }
+        let nonce_of = |req: &str| {
+            let start = req.find("nonce=\"").unwrap() + "nonce=\"".len();
+            req[start..].split('"').next().unwrap().to_string()
+        };
+        assert_ne!(nonce_of(init), nonce_of(call));
         assert!(call.contains("mcp-session-id"));
         assert!(call.contains("\"mcp-session-id\""));
         let _ = std::fs::remove_dir_all(&root);
