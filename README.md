@@ -1,24 +1,43 @@
 # grok-bot-cerveau
 
-Client côté boîte pour un MCP Cerveau. Une installation a un tenant, une clé d'utilisateur et une clé d'agent. Le serveur est interchangeable. Aucune adresse n'est devinée.
+Client côté boîte pour le claim EG. Le contexte d'un tour vient de `channel_thread` sur le MCP Streamable HTTP, le même lecteur que les topics. L'ancien chemin `/cerveau` et le protocole scellé `gb.run.v1` ne sont plus le chemin vivant.
 
-L'enveloppe reçue est du contexte en lecture seule. Elle ne remplace pas les règles de l'agent, ni une approbation humaine avant un envoi, une publication ou un autre effet.
+Le JSON reçu est du contexte en lecture seule. Il ne remplace pas les règles de l'agent, ni une approbation humaine avant un envoi, une publication ou un autre effet.
 
-## Ajouter le serveur
+## Boucle
 
-L'URL suffit. Pas de jeton Bearer, pas d'OAuth, pas de cérémonie d'enregistrement.
+1. Initialiser `/mcp`, puis `tools/list`.
+2. `channel_thread` avec `action=context`, le `goal`, un `ref_id` stable et un `conversation_id` (`default` si omis).
+3. Lire le claim : goal, messages, résumé, liaison, mémoire, préférences, conflits, ordres, agenda, projets, et l'UUID du fil.
+4. Après la réponse, `channel_thread` avec `action=transcript_append`, le même `ref_id` et le même `conversation_id`.
 
-```text
-https://grok.cdxxotus.com/cerveau
-```
+Le serveur associe le bearer au compte. Les arguments ne portent ni compte, ni partner, ni fil. Une URL `/cerveau` est réécrite vers `/mcp` sur le même hôte.
 
-Le premier `run` crée les clés sur la boîte si elles manquent. Le serveur apprend une clé d'utilisateur ou d'agent nouvelle en ouvrant le `gb.run` signé. `initialize` répond sans jeton. S'il publie la clé du serveur, le client l'épingle. S'il n'en publie pas encore, le run ne part pas : on n'invente pas de clé.
+Le jeton est un fichier mode `0600`. Il n'est jamais affiché.
 
 ```bash
-cerveau run --endpoint https://grok.cdxxotus.com/cerveau --human-text "bonjour"
+install -m 600 /dev/stdin ~/.config/cerveau/mcp-token
+cerveau run \
+  --endpoint https://grok.cdxxotus.com/mcp \
+  --human-text "bonjour" \
+  --ref-id "msg-1"
+cerveau append \
+  --endpoint https://grok.cdxxotus.com/mcp \
+  --ref-id "msg-1" \
+  --body-file reponse.txt
 ```
 
-Sans autre option, le tenant est `local`, l'agent `box`, l'utilisateur `user`. Une installation qui a déjà un seul utilisateur le reprend. Plusieurs utilisateurs : `--user` est obligatoire.
+Sans `--ref-id`, le client dérive un identifiant stable du `conversation_id` et du goal. Un retry du même texte réutilise cet identifiant. Un texte différent en obtient un autre.
+
+`--token-file` ou `CERVEAU_MCP_TOKEN_FILE` remplace `~/.config/cerveau/mcp-token`. Le délai d'un appel est de 8 secondes.
+
+## Ancien protocole scellé
+
+`--sealed` garde `gb.run.v1`. Le premier `run` scellé crée encore les clés sur la boîte. Ce n'est plus le chemin du bot.
+
+```bash
+cerveau run --sealed --endpoint https://cerveau.exemple/cerveau --human-text "texte tapé ici"
+```
 
 Rust 1.85 ou plus récent.
 
