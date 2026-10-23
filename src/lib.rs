@@ -1,10 +1,15 @@
-//! Box-side client for a Cerveau-compatible MCP.
+//! Box-side client for the EG MCP.
 //!
-//! Each installation has its own tenant, a user key, and agent keys. Before
-//! a turn, an agent calls [`Client::run`]. The client redacts secret spans,
-//! seals the filtered transcript, and signs the ciphertext. The returned
-//! [`TurnContext`] is read-only context: it never overrides the agent's base
-//! rules or the approvals required before a side effect.
+//! [`context_turn`] speaks Streamable HTTP on `/mcp`: initialize, `tools/list`,
+//! then `channel_thread` with `action = context`. The bearer stays in a mode
+//! 0600 file and is never printed. The server maps that bearer to the account.
+//! The returned context is read-only: it does not replace the agent's rules
+//! or a human approval before a side effect.
+//!
+//! [`Client::run`] is the retired sealed `gb.run.v1` path, selected with
+//! `--sealed`. Each installation then has its own tenant, a user key, and
+//! agent keys. The client redacts secret spans, seals the filtered transcript,
+//! and signs the ciphertext.
 //!
 //! Pending runs are replayed in `seq` order before any newer direct send.
 //! A run N+1 is never sent with `replay: false` while run N is still queued.
@@ -25,6 +30,7 @@ mod envelope;
 mod id;
 mod install;
 mod key;
+mod mcp_eg;
 mod queue;
 mod redact;
 mod seal;
@@ -59,6 +65,10 @@ pub use key::{
     agent_dir, data_home, generate_agent_key, load_agent_key, revoke_key, rotate_agent_key,
     AgentKey, KeyError, PublicExport, KEY_SCHEMA, PUB_SCHEMA, STATUS_ACTIVE, STATUS_RETIRED,
     STATUS_REVOKED,
+};
+pub use mcp_eg::{
+    append_turn, context_turn, default_token_path, mcp_url, stable_ref, wants_mcp, EgError,
+    TokenFile, TurnRequest, CALL_TIMEOUT as MCP_CALL_TIMEOUT, DEFAULT_CONVERSATION,
 };
 pub use redact::{redact_text, RedactOptions, Redaction};
 pub use seal::{

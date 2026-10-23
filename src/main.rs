@@ -5,11 +5,12 @@ use clap::{Parser, Subcommand};
 use serde_json::Value;
 
 use cerveau::{
-    account_public, add_user, config_home, data_home, discover_server, ensure_local,
-    generate_agent_key, init_install, load_agent_key, load_install, parse_messages, pin_server,
-    queue_drop, queue_status, registration_bundle, report_json, revoke_key, rotate_agent_key,
-    validate_endpoint, Client, ClientConfig, InitRequest, MessageOrigin, PresentedServer, RunInput,
-    TurnMessage,
+    account_public, add_user, append_turn, config_home, context_turn, data_home,
+    default_token_path, discover_server, ensure_local, generate_agent_key, init_install,
+    load_agent_key, load_install, parse_messages, pin_server, queue_drop, queue_status,
+    registration_bundle, report_json, revoke_key, rotate_agent_key, stable_ref, validate_endpoint,
+    wants_mcp, Client, ClientConfig, InitRequest, MessageOrigin, PresentedServer, RunInput,
+    TokenFile, TurnMessage, TurnRequest, DEFAULT_CONVERSATION, MCP_CALL_TIMEOUT,
 };
 
 fn main() {
@@ -170,24 +171,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&server)?);
         }
         Cmd::Run(args) => {
+            if args.sealed && args.mcp {
+                return Err("choose either --sealed or --mcp".into());
+            }
             let config_dir = config_dir(args.scope.paths.config_dir.clone())?;
-            let data_dir = data_dir(args.scope.paths.data_dir.clone())?;
-            let user_id = resolve_user(&config_dir, &args.scope.tenant, args.user.as_deref())?;
-            ensure_local(
-                &config_dir,
-                &data_dir,
-                &args.scope.tenant,
-                &args.scope.agent,
-                &user_id,
-                args.endpoint.as_deref(),
-            )?;
-            pin_from_server(&config_dir, &args.scope.tenant, args.endpoint.as_deref())?;
-            let config = open_client(&args.scope, Some(user_id), args.endpoint.clone())?;
-            let input = read_input(&args, &config.user_id)?;
-            let client = Client::new(config);
-            let report = client.run(input)?;
-            println!("{}", serde_json::to_string_pretty(&report_json(&report))?);
+            let token_path = args
+                .token_file
+                .clone()
+                .unwrap_or_else(|| default_token_path(&config_dir));
+            let hinted = args
+                .endpoint
+                .clone()
+                .or_else(|| stored_endpoint(&config_dir, &args.scope.tenant));
+            if !args.sealed && wants_mcp(hinted.as_deref(), &token_path, args.mcp) {
+                run_mcp(&args, &token_path, hinted)?;
+            } else {
+                let data_dir = data_dir(args.scope.paths.data_dir.clone())?;
+                let user_id = resolve_user(&config_dir, &args.scope.tenant, args.user.as_deref())?;
+                ensure_local(
+                    &config_dir,
+                    &data_dir,
+                    &args.scope.tenant,
+                    &args.scope.agent,
+                    &user_id,
+                    args.endpoint.as_deref(),
+                )?;
+                pin_from_server(&config_dir, &args.scope.tenant, args.endpoint.as_deref())?;
+                let config = open_client(&args.scope, Some(user_id), args.endpoint.clone())?;
+                let input = read_input(&args, &config.user_id)?;
+                let client = Client::new(config);
+                let report = client.run(input)?;
+                println!("{}", serde_json::to_string_pretty(&report_json(&report))?);
+            }
         }
+        Cmd::Append(args) => append_mcp(&args)?,
         Cmd::Replay(args) => {
             let config = open_client(&args.scope, args.user.clone(), None)?;
             let client = Client::new(config);
@@ -285,6 +302,79 @@ fn open_client(
         config.endpoint = Some(validate_endpoint(endpoint)?);
     }
     Ok(config)
+}
+
+fn stored_endpoint(config_dir: &Path, tenant: &str) -> Option<String> {
+    load_install(config_dir, tenant)
+        .ok()
+        .and_then(|install| install.server.endpoint)
+}
+
+fn run_mcp(
+    args: &RunArgs,
+    token_path: &Path,
+    hinted: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let goal = args
+        .human_text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or("mcp eg requires --human-text")?;
+    let endpoint = hinted.ok_or("mcp eg requires --endpoint https://…/mcp")?;
+    let token =
+        TokenFile::load(token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
+    let conversation = if args.conversation.trim().is_empty() {
+        DEFAULT_CONVERSATION
+    } else {
+        args.conversation.as_str()
+    };
+    let ref_id = args
+        .ref_id
+        .clone()
+        .unwrap_or_else(|| stable_ref(conversation, goal));
+    let report = context_turn(&TurnRequest {
+        endpoint: &endpoint,
+        token: &token,
+        goal,
+        ref_id: &ref_id,
+        conversation_id: conversation,
+        reply: args.reply.as_deref(),
+        timeout: MCP_CALL_TIMEOUT,
+    })?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let config_dir = config_dir(args.paths.config_dir.clone())?;
+    let token_path = args
+        .token_file
+        .clone()
+        .unwrap_or_else(|| default_token_path(&config_dir));
+    let token =
+        TokenFile::load(&token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
+    let endpoint = args
+        .endpoint
+        .clone()
+        .or_else(|| stored_endpoint(&config_dir, "local"))
+        .ok_or("mcp eg requires --endpoint https://…/mcp")?;
+    let body = if let Some(text) = &args.body {
+        text.clone()
+    } else if let Some(path) = &args.body_file {
+        std::fs::read_to_string(path)?
+    } else {
+        return Err("append requires --body or --body-file".into());
+    };
+    let report = append_turn(
+        &endpoint,
+        &token,
+        &args.conversation,
+        &args.ref_id,
+        &body,
+        MCP_CALL_TIMEOUT,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }
 
 fn config_dir(flag: Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -480,8 +570,10 @@ enum Cmd {
     Revoke(RevokeArgs),
     /// Pin the server X25519 key. A different key is refused unless --replace is set.
     Pin(PinArgs),
-    /// Seal this turn, drain older queued runs, then call the configured backend.
+    /// Ask the EG claim for this turn. `--sealed` keeps the retired gb.run.v1 loop.
     Run(RunArgs),
+    /// Append the assistant reply on the same EG thread and ref_id.
+    Append(AppendArgs),
     /// Replay the encrypted local queue in seq order.
     Replay(ReplayArgs),
     /// List queued run ids, or drop one by run_id. Never prints plaintext.
@@ -622,10 +714,46 @@ struct RunArgs {
     prev_envelope: Option<String>,
     #[arg(long, env = "CERVEAU_MCP_URL")]
     endpoint: Option<String>,
+    /// Stable id of this user message. A retry reuses it. Derived from the goal when omitted.
+    #[arg(long)]
+    ref_id: Option<String>,
+    /// One durable EG thread per conversation id.
+    #[arg(long, default_value = "default")]
+    conversation: String,
+    /// Assistant reply appended after the context call, in the same process.
+    #[arg(long)]
+    reply: Option<String>,
+    /// Bearer file, mode 0600. The value is never printed.
+    #[arg(long, env = "CERVEAU_MCP_TOKEN_FILE")]
+    token_file: Option<PathBuf>,
+    /// Force the EG MCP loop.
+    #[arg(long)]
+    mcp: bool,
+    /// Keep the retired sealed gb.run.v1 loop.
+    #[arg(long)]
+    sealed: bool,
     #[arg(long)]
     redact_emails: bool,
     #[arg(long)]
     redact_phones: bool,
+}
+
+#[derive(clap::Args)]
+struct AppendArgs {
+    #[arg(long, env = "CERVEAU_MCP_URL")]
+    endpoint: Option<String>,
+    #[arg(long, env = "CERVEAU_MCP_TOKEN_FILE")]
+    token_file: Option<PathBuf>,
+    #[arg(long, default_value = "default")]
+    conversation: String,
+    #[arg(long)]
+    ref_id: String,
+    #[arg(long)]
+    body: Option<String>,
+    #[arg(long)]
+    body_file: Option<PathBuf>,
+    #[command(flatten)]
+    paths: Paths,
 }
 
 #[derive(clap::Args)]
