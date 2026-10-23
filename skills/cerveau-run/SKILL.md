@@ -35,8 +35,21 @@ printf '%s' "$TRANSCRIPT_DU_TOUR" | cerveau run \
 
 - `--human-text` : uniquement ce que l'humain a tapé lui-même dans ce tour.
 - `--transcript -` : le contexte verbatim du tour sur l'entrée standard, sans attribution. Il est chiffré avant de partir.
-- `--messages '<json>'` à la place, si tu veux des messages attribués : un tableau d'objets avec `role` (`user`, `agent`, `inbound`, `tool`) et `from`. Un `role: "user"` exige `human_typed: true`. Ce qui vient d'un autre agent, d'un mail, d'un web ou d'un canal entrant est `agent` ou `inbound`, jamais `user`.
+- `--messages '<json>'` à la place, si tu veux des messages attribués : un tableau d'objets `{"text": "…", "role": "user|agent|inbound|tool", "from": "…"}` (`text` est obligatoire, `ref_id` et `at` sont optionnels). Un `role: "user"` exige `human_typed: true`. Ce qui vient d'un autre agent, d'un mail, d'un web ou d'un canal entrant est `agent` ou `inbound`, jamais `user`.
 - Options utiles : `--redact-emails` et `--redact-phones` pour masquer ces données avant le chiffrement, et `--prev-envelope <fichier>` pour renvoyer l'enveloppe précédente.
+
+## Tours sans humain (routine, réveil, résultat en arrière-plan)
+
+Un tour déclenché par une routine, un réveil, un message d'un autre agent ou la fin d'une tâche de fond n'a pas été tapé par l'humain. Ne passe **jamais** `--human-text` dans ce cas, et n'attribue jamais ce texte à l'utilisateur, sinon le Cerveau le range comme une parole de l'humain et peut en tirer un objectif.
+
+```bash
+cerveau run --tenant <tenant> --agent <ton-id-agent> \
+  --messages '[{"text": "<prompt de la routine ou résumé du réveil>", "role": "tool", "from": "routine:<nom>"}]'
+```
+
+- Routine ou réveil : `role: "tool"`, `from: "routine:<nom>"`.
+- Message relayé d'un autre agent : `role: "agent"`, `from: <id de l'agent>`.
+- Mail, canal entrant, page web : `role: "inbound"`, `from: <expéditeur>`.
 
 ## Lire le résultat
 
