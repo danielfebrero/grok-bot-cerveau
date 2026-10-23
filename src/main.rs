@@ -302,19 +302,27 @@ fn data_dir(flag: Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>
 }
 
 fn read_input(args: &RunArgs, user_id: &str) -> Result<RunInput, Box<dyn std::error::Error>> {
+    let transcript_stdin = args
+        .transcript
+        .as_ref()
+        .is_some_and(|path| path.as_os_str() == "-");
+    let messages_stdin = args
+        .messages
+        .as_ref()
+        .is_some_and(|path| path.as_os_str() == "-");
+    if transcript_stdin && messages_stdin {
+        return Err("stdin can only feed one of --transcript or --messages".into());
+    }
     let transcript = match &args.transcript {
-        Some(path) if path.as_os_str() == "-" => {
-            let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf)?;
-            buf
-        }
+        Some(path) if path.as_os_str() == "-" => read_stdin()?,
         Some(path) => std::fs::read_to_string(path)?,
         None => String::new(),
     };
     let mut messages = Vec::new();
     if let Some(path) = &args.messages {
-        let raw = std::fs::read_to_string(path)?;
-        let value: Value = serde_json::from_str(&raw)?;
+        let raw = read_messages_arg(path.as_os_str())?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|err| format!("--messages is not a JSON array ({err}"))?;
         messages.extend(parse_messages(&value, user_id)?);
     }
     let mut trigger = None;
@@ -343,6 +351,27 @@ fn read_input(args: &RunArgs, user_id: &str) -> Result<RunInput, Box<dyn std::er
         redact_emails: args.redact_emails,
         redact_phones: args.redact_phones,
     })
+}
+
+fn read_stdin() -> Result<String, Box<dyn std::error::Error>> {
+    let mut buf = String::new();
+    io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// `--messages` is a JSON array inline when the argument starts with `[`,
+/// stdin when it is `-`, and a file path otherwise.
+fn read_messages_arg(arg: &std::ffi::OsStr) -> Result<String, Box<dyn std::error::Error>> {
+    if arg == "-" {
+        return read_stdin();
+    }
+    if let Some(text) = arg.to_str() {
+        if text.trim_start().starts_with('[') {
+            return Ok(text.to_string());
+        }
+    }
+    std::fs::read_to_string(Path::new(arg))
+        .map_err(|err| format!("--messages {}: {err}", Path::new(arg).display()).into())
 }
 
 fn required(
@@ -580,10 +609,10 @@ struct RunArgs {
     scope: Scope,
     #[arg(long, env = "CERVEAU_USER")]
     user: Option<String>,
-    /// Verbatim transcript. Use "-" for stdin. Not attributed to anyone.
+    /// Host transcript JSONL, or plain text. "-" reads stdin. Not attributed.
     #[arg(long)]
     transcript: Option<PathBuf>,
-    /// JSON array of attributed messages.
+    /// Attributed messages: a JSON array inline (starts with '['), "-" for stdin, or a file path.
     #[arg(long)]
     messages: Option<PathBuf>,
     /// Text the selected user typed in this turn.
@@ -605,4 +634,54 @@ struct QueueArgs {
     scope: Scope,
     #[arg(long = "drop")]
     drop_run: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn messages_inline_json_is_not_read_as_a_path() {
+        let raw = r#"[{"role":"agent","from":"gb:other","text":"ping"}]"#;
+        let got = read_messages_arg(OsStr::new(raw)).unwrap();
+        assert_eq!(got, raw);
+        let value: Value = serde_json::from_str(&got).unwrap();
+        let messages = parse_messages(&value, "p_owner").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "ping");
+        let spaced = format!("  {raw}");
+        assert_eq!(read_messages_arg(OsStr::new(&spaced)).unwrap(), spaced);
+        let bracket_name = read_messages_arg(OsStr::new("[nope].json")).unwrap();
+        assert_eq!(bracket_name, "[nope].json");
+    }
+
+    #[test]
+    fn messages_file_path_is_read() {
+        let root = std::env::temp_dir().join(format!(
+            "cerveau-messages-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&root);
+        let path = root.join("messages.json");
+        let raw = r#"[{"role":"tool","from":"shell","text":"ok"}]"#;
+        std::fs::write(&path, raw).unwrap();
+        let got = read_messages_arg(path.as_os_str()).unwrap();
+        assert_eq!(got, raw);
+        let value: Value = serde_json::from_str(&got).unwrap();
+        let messages = parse_messages(&value, "p_owner").unwrap();
+        assert_eq!(messages[0].text, "ok");
+        let missing = root.join("missing.json");
+        let err = read_messages_arg(missing.as_os_str()).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("No such file") || text.contains("os error 2"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
