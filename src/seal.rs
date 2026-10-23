@@ -686,6 +686,82 @@ mod tests {
         assert_eq!(stored, fixture);
     }
 
+    #[test]
+    fn host_jsonl_transcript_is_sealed_on_body_v2() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let long = "mot ".repeat(400);
+        let transcript = format!(
+            concat!(
+                r#"{{"role":"user","message":{{"content":[{{"type":"text","text":"voir {sha} merci"}}]}}}}"#,
+                "\n",
+                r#"{{"role":"assistant","message":{{"content":[{{"type":"thinking","thinking":"note interne"}},{{"type":"tool_use","id":"toolu_abc","name":"Shell","input":{{"command":"echo ok"}}}}]}}}}"#,
+                "\n",
+                r#"{{"role":"tool","message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_abc","name":"Shell","result":"{long}"}}]}}}}"#,
+                "\n",
+            ),
+            sha = sha,
+            long = long,
+        );
+        let human = TurnMessage {
+            origin: MessageOrigin::Human { claimed_from: None },
+            text: "salut tapé".into(),
+            ref_id: None,
+            at: None,
+        };
+        let clear = prepare_body(RunInput {
+            tenant_id: "tenant-test".into(),
+            user_id: "p_owner".into(),
+            transcript,
+            trigger: Some(human.clone()),
+            messages: vec![human],
+            ..RunInput::default()
+        })
+        .unwrap();
+        assert_eq!(clear.schema, crate::body::BODY_SCHEMA);
+        let agent = agent();
+        let recip = StaticSecret::random_from_rng(OsRng);
+        let recip_pub = PublicKey::from(&recip).to_bytes();
+        let recip_sec = recip.to_bytes();
+        let message = seal_run(request(
+            &clear,
+            &agent,
+            "run_JSONL",
+            "cerveau-test",
+            &recip_pub,
+            false,
+        ))
+        .unwrap();
+        assert_eq!(message.schema, RUN_SCHEMA);
+        assert_eq!(message.version, RUN_VERSION);
+        let plain = open_run(&message, &recip_sec, agent.ed25519_public()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(value["schema"], "gb.run.body.v2");
+        assert!(value.get("user_id").is_none());
+        let transcript = value["transcript"].as_str().unwrap();
+        assert!(transcript.contains(&long));
+        assert!(transcript.contains("\"type\":\"thinking\""));
+        assert!(transcript.contains("\"type\":\"tool_use\""));
+        assert!(transcript.contains("\"type\":\"tool_result\""));
+        assert!(transcript.contains("toolu_abc"));
+        assert!(transcript.contains("[REDACTED:hex]"));
+        assert!(!transcript.contains(sha));
+        let lines: Vec<&str> = transcript
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        for line in lines {
+            let item: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(!item["role"].as_str().unwrap().is_empty());
+            assert!(item.pointer("/message/content").unwrap().is_array());
+        }
+        let delta = value["transcript_delta"].as_array().unwrap();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0]["text"], "salut tapé");
+        assert_eq!(delta[0]["role"], "user");
+        assert!(!delta[0]["text"].as_str().unwrap().contains("mot mot"));
+    }
+
     fn vector_seed(label: &str) -> [u8; 32] {
         let mut material = b"cerveau-public-test-vector-v1\0".to_vec();
         material.extend_from_slice(label.as_bytes());

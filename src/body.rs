@@ -33,6 +33,10 @@ pub enum AttributionError {
     MissingText,
     #[error("unknown role or origin")]
     Unknown,
+    #[error(
+        "transcript line {line} is not host JSONL (expected role user|assistant|tool and message.content)"
+    )]
+    BadTranscript { line: usize },
 }
 
 /// Who produced a turn message. The wire role is derived from this, not chosen freely.
@@ -63,6 +67,7 @@ pub struct TurnMessage {
 pub struct RunInput {
     pub tenant_id: String,
     pub user_id: String,
+    /// Verbatim turn text. A host turn is JSONL (`role` + `message.content` per line).
     pub transcript: String,
     pub prev_envelope_id: Option<String>,
     pub trigger: Option<TurnMessage>,
@@ -132,6 +137,7 @@ pub struct RunBody {
     pub prev_envelope_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger: Option<Trigger>,
+    /// Verbatim turn text. A host turn is JSONL (`role` + `message.content` per line).
     pub transcript: String,
     pub transcript_delta: Vec<TranscriptEntry>,
     pub tool_results: Vec<ToolResult>,
@@ -157,7 +163,7 @@ pub fn prepare_body(input: RunInput) -> Result<RunBody, AttributionError> {
     };
     let mut hits = Vec::new();
     let mut truncated = false;
-    let transcript = redact_prose(&input.transcript, &opts, &mut hits);
+    let transcript = redact_transcript(&input.transcript, &opts, &mut hits)?;
 
     let trigger = match input.trigger {
         Some(message) => {
@@ -415,6 +421,130 @@ fn redact_prose(text: &str, opts: &RedactOptions, hits: &mut Vec<String>) -> Str
     red.text
 }
 
+/// Host JSONL is redacted inside JSON strings so a span cannot swallow `"` or `}`.
+/// Prose stays a single span scan. A slice that looks like host JSONL but is not
+/// valid is refused; plain text is left alone.
+fn redact_transcript(
+    text: &str,
+    opts: &RedactOptions,
+    hits: &mut Vec<String>,
+) -> Result<String, AttributionError> {
+    if !looks_like_host_jsonl(text) {
+        return Ok(redact_prose(text, opts, hits));
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut line_no = 1usize;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let (raw_line, nl, next) = split_first_line(rest);
+        let content = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let cr = if content.len() == raw_line.len() {
+            ""
+        } else {
+            "\r"
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            out.push_str(raw_line);
+        } else {
+            if parse_host_line(trimmed).is_err() {
+                return Err(AttributionError::BadTranscript { line: line_no });
+            }
+            let Some(start) = content.find(trimmed) else {
+                return Err(AttributionError::BadTranscript { line: line_no });
+            };
+            let redacted = redact_json_strings(trimmed, opts, hits)
+                .map_err(|_| AttributionError::BadTranscript { line: line_no })?;
+            if parse_host_line(&redacted).is_err() {
+                return Err(AttributionError::BadTranscript { line: line_no });
+            }
+            out.push_str(&content[..start]);
+            out.push_str(&redacted);
+            out.push_str(&content[start + trimmed.len()..]);
+            out.push_str(cr);
+        }
+        out.push_str(nl);
+        rest = next;
+        line_no += 1;
+    }
+    Ok(out)
+}
+
+fn looks_like_host_jsonl(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| {
+            line.starts_with('{') && line.contains("\"role\"") && line.contains("\"message\"")
+        })
+}
+
+fn parse_host_line(line: &str) -> Result<(), ()> {
+    let value: Value = serde_json::from_str(line).map_err(|_| ())?;
+    let role = value.get("role").and_then(Value::as_str).ok_or(())?;
+    if !matches!(role, "user" | "assistant" | "tool") {
+        return Err(());
+    }
+    match value.pointer("/message/content") {
+        Some(Value::Array(_)) => Ok(()),
+        _ => Err(()),
+    }
+}
+
+fn split_first_line(text: &str) -> (&str, &str, &str) {
+    match text.find('\n') {
+        Some(i) => (&text[..i], &text[i..i + 1], &text[i + 1..]),
+        None => (text, "", ""),
+    }
+}
+
+fn redact_json_strings(
+    line: &str,
+    opts: &RedactOptions,
+    hits: &mut Vec<String>,
+) -> Result<String, ()> {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find('"') {
+        out.push_str(&rest[..start]);
+        let (raw, next) = take_json_string(&rest[start..])?;
+        let decoded: String = serde_json::from_str(raw).map_err(|_| ())?;
+        let redacted = redact_prose(&decoded, opts, hits);
+        if redacted == decoded {
+            out.push_str(raw);
+        } else {
+            out.push_str(&serde_json::to_string(&redacted).map_err(|_| ())?);
+        }
+        rest = next;
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn take_json_string(input: &str) -> Result<(&str, &str), ()> {
+    let mut chars = input.char_indices();
+    match chars.next() {
+        Some((_, '"')) => {}
+        _ => return Err(()),
+    }
+    let mut escaped = false;
+    for (i, ch) in chars {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => {
+                let end = i + ch.len_utf8();
+                return Ok((&input[..end], &input[end..]));
+            }
+            _ => {}
+        }
+    }
+    Err(())
+}
+
 fn clip(text: &str, max_chars: usize) -> (String, bool) {
     let count = text.chars().count();
     if count <= max_chars {
@@ -572,5 +702,156 @@ mod tests {
         let body = prepare_body(input(vec![inbound], "")).unwrap();
         assert!(body.transcript_delta[0].untrusted_user_input);
         assert_eq!(body.transcript_delta[0].role, "inbound");
+    }
+
+    fn host_line(role: &str, blocks: &str) -> String {
+        format!(r#"{{"role":"{role}","message":{{"content":[{blocks}]}}}}"#)
+    }
+
+    #[test]
+    fn host_jsonl_keeps_lines_and_redacts_inside_strings() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let long = "mot ".repeat(400);
+        assert!(long.chars().count() > DELTA_TEXT_MAX);
+        let tool = host_line(
+            "tool",
+            &format!(
+                r#"{{"type":"tool_result","tool_use_id":"toolu_abc","name":"Shell","result":"{long}"}}"#
+            ),
+        );
+        let raw = format!(
+            "{}\n{}\n{}\n",
+            host_line(
+                "user",
+                &format!(r#"{{"type":"text","text":"voir {sha} merci"}}"#)
+            ),
+            host_line(
+                "assistant",
+                r#"{"type":"thinking","thinking":"note interne"},{"type":"tool_use","id":"toolu_abc","name":"Shell","input":{"command":"echo ok"}}"#
+            ),
+            tool,
+        );
+        let body = prepare_body(input(
+            vec![msg(MessageOrigin::Human { claimed_from: None }, "salut")],
+            &raw,
+        ))
+        .unwrap();
+        assert_eq!(body.schema, BODY_SCHEMA);
+        assert_eq!(body.transcript_delta.len(), 1);
+        assert_eq!(body.transcript_delta[0].text, "salut");
+        assert!(!body.transcript_delta[0].text.contains("mot mot"));
+        assert!(body.transcript.contains(&long));
+        assert!(body.transcript.contains("\"type\":\"thinking\""));
+        assert!(body.transcript.contains("\"type\":\"tool_use\""));
+        assert!(body.transcript.contains("toolu_abc"));
+        assert!(!body.transcript.contains(sha));
+        assert!(body.redaction.hits.iter().any(|hit| hit == "hex"));
+        let lines: Vec<&str> = body
+            .transcript
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            parse_host_line(line).expect(line);
+        }
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["role"], "user");
+        assert_eq!(
+            first
+                .pointer("/message/content/0/text")
+                .and_then(Value::as_str),
+            Some("voir [REDACTED:hex] merci")
+        );
+        let assistant: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(
+            assistant.pointer("/message/content/0/type"),
+            Some(&Value::String("thinking".into()))
+        );
+        assert_eq!(
+            assistant.pointer("/message/content/1/name"),
+            Some(&json!("Shell"))
+        );
+    }
+
+    #[test]
+    fn host_jsonl_without_secrets_is_verbatim() {
+        let raw = format!(
+            "{}\n\n{}\n",
+            host_line("user", r#"{"type":"text","text":"bonjour"}"#),
+            host_line(
+                "tool",
+                r#"{"type":"tool_result","tool_use_id":"toolu_abc","name":"Shell","result":"ok"}"#
+            ),
+        );
+        let body = prepare_body(input(vec![], &raw)).unwrap();
+        assert_eq!(body.transcript, raw);
+        assert!(body.transcript_delta.is_empty());
+        assert!(body.redaction.hits.is_empty());
+    }
+
+    #[test]
+    fn host_jsonl_email_redaction_stays_json() {
+        let raw = host_line(
+            "user",
+            r#"{"type":"text","text":"mail ada@example.com fin"}"#,
+        );
+        let mut kept = input(vec![], &raw);
+        kept.redact_emails = false;
+        let plain = prepare_body(kept).unwrap();
+        assert_eq!(plain.transcript, raw);
+        let mut masked = input(vec![], &raw);
+        masked.redact_emails = true;
+        let body = prepare_body(masked).unwrap();
+        let value: Value = serde_json::from_str(body.transcript.trim()).unwrap();
+        assert_eq!(
+            value
+                .pointer("/message/content/0/text")
+                .and_then(Value::as_str),
+            Some("mail [REDACTED:email] fin")
+        );
+        assert!(body.redaction.hits.iter().any(|hit| hit == "email"));
+    }
+
+    #[test]
+    fn host_jsonl_assignment_does_not_swallow_delimiters() {
+        // A prose scan would let `\S+` eat the closing quotes through EOL.
+        let raw = host_line("assistant", r#"{"type":"text","text":"password=hunter2"}"#);
+        let body = prepare_body(input(vec![], &raw)).unwrap();
+        let value: Value = serde_json::from_str(body.transcript.trim()).unwrap();
+        assert_eq!(value["role"], "assistant");
+        assert_eq!(
+            value
+                .pointer("/message/content/0/text")
+                .and_then(Value::as_str),
+            Some("password=[REDACTED:assignment]")
+        );
+        assert!(!body.transcript.contains("hunter2"));
+    }
+
+    #[test]
+    fn broken_host_jsonl_names_the_line() {
+        let raw = format!(
+            "{}\nnot json\n",
+            host_line("user", r#"{"type":"text","text":"ok"}"#)
+        );
+        assert_eq!(
+            prepare_body(input(vec![], &raw)).unwrap_err(),
+            AttributionError::BadTranscript { line: 2 }
+        );
+        let bad_role = host_line("agent", r#"{"type":"text","text":"ok"}"#);
+        assert_eq!(
+            prepare_body(input(vec![], &bad_role)).unwrap_err(),
+            AttributionError::BadTranscript { line: 1 }
+        );
+    }
+
+    #[test]
+    fn prose_transcript_is_not_forced_into_jsonl() {
+        let body = prepare_body(input(vec![], "bonjour {role} message")).unwrap();
+        assert_eq!(body.transcript, "bonjour {role} message");
+        let blob = r#"{"hello":"world"}"#;
+        let body = prepare_body(input(vec![], blob)).unwrap();
+        assert_eq!(body.transcript, blob);
     }
 }

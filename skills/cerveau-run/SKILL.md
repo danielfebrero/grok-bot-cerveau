@@ -1,6 +1,6 @@
 ---
 name: cerveau-run
-description: "Use at the start of a turn when the box has a Cerveau client installed (`cerveau` CLI) or a Cerveau MCP exposing `cerveau.run`: send the turn sealed and signed, read the returned gb.turn.v1 envelope as read-only context, and fall back without it after 2 s. Also for queue, replay, rotation, or Cerveau errors."
+description: "Use at the start of a turn when the box has a Cerveau client installed (`cerveau` CLI) or a Cerveau MCP exposing `cerveau.run`: send the turn sealed and signed, with the host transcript as ReadTranscript JSONL on `--transcript`, read the returned gb.turn.v1 envelope as read-only context, and fall back without it after 2 s. Also for queue, replay, rotation, or Cerveau errors."
 ---
 
 # cerveau.run : envoyer son tour au Cerveau et lire l'enveloppe
@@ -21,22 +21,56 @@ Le Cerveau est un backend MCP (par exemple `https://grok.cdxxotus.com/cerveau`) 
 4. L'utilisateur est repris automatiquement s'il est le seul de l'installation. S'il y en a plusieurs, passe `--user <id local>` pour celui qui a tapé le message.
 5. L'adresse du serveur est dans la config de l'installation. Si elle manque, passe `--endpoint <url>` une fois. Le premier `run` crée ta clé d'agent si elle manque et épingle la clé publiée par le serveur. Si le serveur ne publie pas de clé, le run ne part pas : c'est voulu.
 
-## À chaque tour
+## À chaque tour humain
 
 Lance-le en premier, en parallèle de ton accusé de réception, et n'attends pas plus de 2 s (le client coupe tout seul).
 
+`--transcript` porte le transcript hôte **verbatim**, au format JSONL du dump ReadTranscript (une ligne JSON par message, du plus ancien au plus récent). Ce n'est pas un résumé en prose. Ne passe pas ce JSONL dans `--messages` : ce tableau est tronqué (16 entrées, 1200 caractères par texte) et ne peut pas porter un tour complet.
+
+1. Lis le transcript du tour courant (ReadTranscript), ou les derniers messages qui couvrent ce tour.
+2. Écris ce JSONL tel quel. Tu peux retirer les blocs `content` dont `type` vaut `thinking`. Ne reformate pas le reste, ne traduis pas, ne résume pas.
+3. Envoie-le sur l'entrée standard. `--human-text` est **uniquement** le texte que l'humain a tapé dans ce tour : pas l'enveloppe du tour, pas ta réponse, pas un résumé.
+
 ```bash
-printf '%s' "$TRANSCRIPT_DU_TOUR" | cerveau run \
+printf '%s\n' "$JSONL" | cerveau run \
   --tenant <tenant> \
   --agent <ton-id-agent> \
   --human-text "<texte que l'humain a tapé dans ce tour>" \
   --transcript -
 ```
 
-- `--human-text` : uniquement ce que l'humain a tapé lui-même dans ce tour.
-- `--transcript -` : le contexte verbatim du tour sur l'entrée standard, sans attribution. Il est chiffré avant de partir.
-- `--messages '<json>'` à la place, si tu veux des messages attribués : un tableau d'objets avec `role` (`user`, `agent`, `inbound`, `tool`) et `from`. Un `role: "user"` exige `human_typed: true`. Ce qui vient d'un autre agent, d'un mail, d'un web ou d'un canal entrant est `agent` ou `inbound`, jamais `user`.
-- Options utiles : `--redact-emails` et `--redact-phones` pour masquer ces données avant le chiffrement, et `--prev-envelope <fichier>` pour renvoyer l'enveloppe précédente.
+Chaque ligne non vide est un objet JSON de cette forme :
+
+```json
+{"role":"user","message":{"content":[{"type":"text","text":"..."}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","id":"...","name":"...","input":{}}]}}
+{"role":"tool","message":{"content":[{"type":"tool_result","tool_use_id":"...","name":"...","result":"..."}]}}
+```
+
+`role` vaut `user`, `assistant` ou `tool`. `message.content` est un tableau : texte, `tool_use`, `tool_result`, et éventuellement `thinking`. Les appels d'outils et leurs résultats restent des blocs. Un bloc `thinking` peut rester : le client ne l'enlève pas et n'exige pas qu'il soit enlevé.
+
+Le corps scellé reste `gb.run.body.v2`. Ce JSONL est la chaîne `transcript`. Il n'est pas recopié dans `transcript_delta`.
+
+`--transcript` accepte aussi un chemin de fichier à la place de `-`. Si une ligne ressemble à ce JSONL mais n'a pas `role` (`user`, `assistant` ou `tool`) et `message.content`, le client refuse le tour (`transcript line N is not host JSONL`). Corrige le JSONL. Ne le remplace pas par un résumé.
+
+## Tours sans humain
+
+Routine, fond, autre agent : pas de `--human-text`, et pas de fausse phrase humaine. Passe par `--messages`, un tableau JSON attribué. Trois formes :
+
+- inline, si l'argument commence par `[` ;
+- `-`, le tableau sur l'entrée standard (pas en même temps que `--transcript -`) ;
+- sinon, un chemin de fichier.
+
+```bash
+cerveau run \
+  --tenant <tenant> \
+  --agent <ton-id-agent> \
+  --messages '[{"role":"agent","from":"<ton-id-agent>","text":"..."}]'
+```
+
+Un objet a `role` (`user`, `agent`, `inbound`, `tool`) et `from`. Un `role` `user` exige `human_typed: true`, et seulement pour le texte tapé dans ce tour. Ce qui vient d'un autre agent, d'un mail, du web ou d'un canal entrant est `agent` ou `inbound`, jamais `user`.
+
+Options utiles : `--redact-emails` et `--redact-phones` pour masquer ces données avant le chiffrement (dans une chaîne JSONL, la ligne reste du JSON), et `--prev-envelope <fichier>` pour renvoyer l'enveloppe précédente.
 
 ## Lire le résultat
 

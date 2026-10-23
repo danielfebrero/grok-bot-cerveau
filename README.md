@@ -51,7 +51,17 @@ cerveau rotate --tenant acme --agent box
 cerveau queue --tenant acme --agent box
 ```
 
-`--human-text` est le texte tapé dans ce tour. `--transcript` est du texte brut, sans expéditeur. `--messages` est un tableau JSON.
+`--human-text` est le texte tapé dans ce tour. `--messages` est un tableau JSON attribué : inline si l'argument commence par `[`, `-` pour l'entrée standard, sinon un chemin de fichier.
+
+## Transcript hôte (JSONL)
+
+Pour un tour humain, `--transcript` (fichier, ou `-` pour l'entrée standard) porte une tranche du transcript hôte, une ligne JSON par message, du plus ancien au plus récent. Le schéma du corps reste `gb.run.body.v2` : ce JSONL est la chaîne `transcript`, pas `transcript_delta` (celui-ci reste le tableau `--messages`, plafonné).
+
+Chaque ligne a `role` (`user`, `assistant` ou `tool`) et `message.content` (texte, `tool_use`, `tool_result`, `thinking`). Les blocs `thinking` peuvent rester. `--human-text` reste seulement ce que l'humain a tapé. Un tour sans humain (routine, entrée, autre agent) continue d'utiliser `--messages`, sans `--human-text` inventé.
+
+Le masquage des secrets, sur ce JSONL, ne touche que le contenu des chaînes : une ligne reste du JSON valide. Un texte qui n'a pas cette forme (note, prose) est encore accepté. S'il ressemble à du JSONL hôte et qu'une ligne est invalide, le run est refusé.
+
+`skills/cerveau-run/SKILL.md` dit à l'agent de produire cette tranche avec ReadTranscript, sans la résumer.
 
 Répertoires `0700`, fichiers `0600`. Une clé ou une file lisible par d'autres est refusée.
 
