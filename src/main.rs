@@ -6,11 +6,12 @@ use serde_json::Value;
 
 use cerveau::{
     account_public, add_user, append_turn, config_home, context_turn, data_home,
-    default_token_path, discover_server, ensure_local, generate_agent_key, init_install,
-    load_agent_key, load_install, parse_messages, pin_server, queue_drop, queue_status,
-    registration_bundle, report_json, revoke_key, rotate_agent_key, stable_ref, validate_endpoint,
-    wants_mcp, Client, ClientConfig, InitRequest, MessageOrigin, PresentedServer, RunInput,
-    TokenFile, TurnMessage, TurnRequest, DEFAULT_CONVERSATION, MCP_CALL_TIMEOUT,
+    default_signing_path, default_token_path, discover_server, ensure_local, generate_agent_key,
+    generate_mcp_signing_key, init_install, load_agent_key, load_install, parse_messages,
+    pin_server, queue_drop, queue_status, registration_bundle, report_json, revoke_key,
+    rotate_agent_key, stable_ref, validate_endpoint, wants_mcp, Client, ClientConfig, InitRequest,
+    MessageOrigin, PresentedServer, RunInput, SigningFile, TokenFile, TurnMessage, TurnRequest,
+    DEFAULT_CONVERSATION, MCP_CALL_TIMEOUT,
 };
 
 fn main() {
@@ -179,12 +180,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .token_file
                 .clone()
                 .unwrap_or_else(|| default_token_path(&config_dir));
+            let signing_path = args
+                .signing_file
+                .clone()
+                .unwrap_or_else(|| default_signing_path(&config_dir));
             let hinted = args
                 .endpoint
                 .clone()
                 .or_else(|| stored_endpoint(&config_dir, &args.scope.tenant));
-            if !args.sealed && wants_mcp(hinted.as_deref(), &token_path, args.mcp) {
-                run_mcp(&args, &token_path, hinted)?;
+            if !args.sealed && wants_mcp(hinted.as_deref(), &token_path, &signing_path, args.mcp)
+            {
+                run_mcp(&args, &token_path, &signing_path, hinted)?;
             } else {
                 let data_dir = data_dir(args.scope.paths.data_dir.clone())?;
                 let user_id = resolve_user(&config_dir, &args.scope.tenant, args.user.as_deref())?;
@@ -203,6 +209,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let report = client.run(input)?;
                 println!("{}", serde_json::to_string_pretty(&report_json(&report))?);
             }
+        }
+        Cmd::McpKey(args) => {
+            let dir = config_dir(args.paths.config_dir)?;
+            let public = generate_mcp_signing_key(&dir, &args.key_id)?;
+            let path = default_signing_path(&dir);
+            eprintln!("key_id={} path={}", args.key_id, path.display());
+            println!("{public}");
         }
         Cmd::Append(args) => append_mcp(&args)?,
         Cmd::Replay(args) => {
@@ -313,6 +326,7 @@ fn stored_endpoint(config_dir: &Path, tenant: &str) -> Option<String> {
 fn run_mcp(
     args: &RunArgs,
     token_path: &Path,
+    signing_path: &Path,
     hinted: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let goal = args
@@ -321,8 +335,7 @@ fn run_mcp(
         .filter(|text| !text.trim().is_empty())
         .ok_or("mcp eg requires --human-text")?;
     let endpoint = hinted.ok_or("mcp eg requires --endpoint https://…/mcp")?;
-    let token =
-        TokenFile::load(token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
+    let (token, signing) = load_mcp_auth(token_path, signing_path)?;
     let conversation = if args.conversation.trim().is_empty() {
         DEFAULT_CONVERSATION
     } else {
@@ -334,7 +347,8 @@ fn run_mcp(
         .unwrap_or_else(|| stable_ref(conversation, goal));
     let report = context_turn(&TurnRequest {
         endpoint: &endpoint,
-        token: &token,
+        token: token.as_ref(),
+        signing: signing.as_ref(),
         goal,
         ref_id: &ref_id,
         conversation_id: conversation,
@@ -345,14 +359,32 @@ fn run_mcp(
     Ok(())
 }
 
+/// Le fichier de signature gagne. Le bearer n'est pas lu dans ce cas.
+fn load_mcp_auth(
+    token_path: &Path,
+    signing_path: &Path,
+) -> Result<(Option<TokenFile>, Option<SigningFile>), Box<dyn std::error::Error>> {
+    if signing_path.is_file() {
+        let signing = SigningFile::load(signing_path)
+            .map_err(|err| format!("{err} ({})", signing_path.display()))?;
+        return Ok((None, Some(signing)));
+    }
+    let token =
+        TokenFile::load(token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
+    Ok((Some(token), None))
+}
+
 fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
     let config_dir = config_dir(args.paths.config_dir.clone())?;
     let token_path = args
         .token_file
         .clone()
         .unwrap_or_else(|| default_token_path(&config_dir));
-    let token =
-        TokenFile::load(&token_path).map_err(|err| format!("{err} ({})", token_path.display()))?;
+    let signing_path = args
+        .signing_file
+        .clone()
+        .unwrap_or_else(|| default_signing_path(&config_dir));
+    let (token, signing) = load_mcp_auth(&token_path, &signing_path)?;
     let endpoint = args
         .endpoint
         .clone()
@@ -367,7 +399,8 @@ fn append_mcp(args: &AppendArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
     let report = append_turn(
         &endpoint,
-        &token,
+        token.as_ref(),
+        signing.as_ref(),
         &args.conversation,
         &args.ref_id,
         &body,
@@ -560,6 +593,9 @@ enum Cmd {
     Keygen(ScopeArgs),
     /// Create or reprint the account-user public key. The seed stays on disk.
     AccountKey(AccountKeyArgs),
+    /// Create the MCP HTTP signing key. Stdout is the 32-byte public key, base64.
+    /// Refuses to overwrite. The seed stays in mcp-signing-key, mode 0600.
+    McpKey(McpKeyArgs),
     /// Print the active public key and key_id.
     Pubkey(ScopeArgs),
     /// Print the registration bundle for the backend operator to approve.
@@ -651,6 +687,15 @@ struct AccountKeyArgs {
 }
 
 #[derive(clap::Args)]
+struct McpKeyArgs {
+    /// keyid RFC 9421, `[A-Za-z0-9_-]{1,64}`.
+    #[arg(long)]
+    key_id: String,
+    #[command(flatten)]
+    paths: Paths,
+}
+
+#[derive(clap::Args)]
 struct RegisterArgs {
     #[command(flatten)]
     scope: Scope,
@@ -724,8 +769,13 @@ struct RunArgs {
     #[arg(long)]
     reply: Option<String>,
     /// Bearer file, mode 0600. The value is never printed.
+    /// Ignored when the signing key file is present.
     #[arg(long, env = "CERVEAU_MCP_TOKEN_FILE")]
     token_file: Option<PathBuf>,
+    /// Ed25519 seed file, mode 0600. When present, the request is signed and
+    /// no Authorization header is sent.
+    #[arg(long, env = "CERVEAU_MCP_SIGNING_KEY")]
+    signing_file: Option<PathBuf>,
     /// Force the EG MCP loop.
     #[arg(long)]
     mcp: bool,
@@ -744,6 +794,8 @@ struct AppendArgs {
     endpoint: Option<String>,
     #[arg(long, env = "CERVEAU_MCP_TOKEN_FILE")]
     token_file: Option<PathBuf>,
+    #[arg(long, env = "CERVEAU_MCP_SIGNING_KEY")]
+    signing_file: Option<PathBuf>,
     #[arg(long, default_value = "default")]
     conversation: String,
     #[arg(long)]

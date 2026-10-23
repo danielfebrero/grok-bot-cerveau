@@ -1,6 +1,7 @@
 //! Boucle MCP Streamable HTTP du claim EG.
 //!
-//! Le jeton ne choisit pas le compte. Le serveur le fait, à partir du bearer.
+//! Le jeton ne choisit pas le compte. Le serveur le fait, à partir du bearer
+//! ou, si le fichier de signature est là, à partir de la clé publique.
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -81,8 +82,13 @@ pub fn default_token_path(config_dir: &Path) -> PathBuf {
 }
 
 /// `true` quand ce tour doit parler au MCP EG plutôt qu'au protocole scellé.
-pub fn wants_mcp(endpoint: Option<&str>, token_path: &Path, forced: bool) -> bool {
-    if forced || token_path.is_file() {
+pub fn wants_mcp(
+    endpoint: Option<&str>,
+    token_path: &Path,
+    signing_path: &Path,
+    forced: bool,
+) -> bool {
+    if forced || token_path.is_file() || signing_path.is_file() {
         return true;
     }
     endpoint.is_some_and(|url| {
@@ -110,7 +116,9 @@ pub fn stable_ref(conversation: &str, goal: &str) -> String {
 
 pub struct TurnRequest<'a> {
     pub endpoint: &'a str,
-    pub token: &'a TokenFile,
+    /// Ignoré quand `signing` est présent : les deux ensemble signent seulement.
+    pub token: Option<&'a TokenFile>,
+    pub signing: Option<&'a crate::mcp_sig::SigningFile>,
     pub goal: &'a str,
     pub ref_id: &'a str,
     pub conversation_id: &'a str,
@@ -127,7 +135,7 @@ pub fn context_turn(req: &TurnRequest<'_>) -> Result<Value, EgError> {
         check_piece("body", reply, 32_000)?;
     }
     let url = mcp_url(req.endpoint)?;
-    let mut session = Session::open(&url, req.token, req.timeout)?;
+    let mut session = Session::open(&url, req.signing, req.token, req.timeout)?;
     session.initialize()?;
     session.notify_initialized()?;
     session.require_channel_thread()?;
@@ -160,7 +168,8 @@ pub fn context_turn(req: &TurnRequest<'_>) -> Result<Value, EgError> {
 
 pub fn append_turn(
     endpoint: &str,
-    token: &TokenFile,
+    token: Option<&TokenFile>,
+    signing: Option<&crate::mcp_sig::SigningFile>,
     conversation_id: &str,
     ref_id: &str,
     body: &str,
@@ -170,7 +179,7 @@ pub fn append_turn(
     check_piece("ref_id", ref_id, 200)?;
     check_piece("conversation_id", conversation_id, 200)?;
     let url = mcp_url(endpoint)?;
-    let mut session = Session::open(&url, token, timeout)?;
+    let mut session = Session::open(&url, signing, token, timeout)?;
     session.initialize()?;
     session.notify_initialized()?;
     let persisted =
@@ -183,26 +192,45 @@ pub fn append_turn(
     }))
 }
 
-struct Session {
+enum CallAuth<'a> {
+    Bearer(String),
+    Sign(&'a crate::mcp_sig::SigningFile),
+}
+
+struct Session<'a> {
     agent: ureq::Agent,
     endpoint: String,
-    authorization: String,
+    auth: CallAuth<'a>,
     session_id: Option<String>,
     protocol: String,
     next_id: i64,
 }
 
-impl Drop for Session {
+impl Drop for Session<'_> {
     fn drop(&mut self) {
-        self.authorization.zeroize();
+        if let CallAuth::Bearer(value) = &mut self.auth {
+            value.zeroize();
+        }
     }
 }
 
-impl Session {
-    fn open(endpoint: &str, token: &TokenFile, timeout: Duration) -> Result<Self, EgError> {
+impl<'a> Session<'a> {
+    fn open(
+        endpoint: &str,
+        signing: Option<&'a crate::mcp_sig::SigningFile>,
+        token: Option<&TokenFile>,
+        timeout: Duration,
+    ) -> Result<Self, EgError> {
         if timeout.is_zero() {
             return Err(EgError::Transport("timeout".into()));
         }
+        let auth = if let Some(signing) = signing {
+            CallAuth::Sign(signing)
+        } else if let Some(token) = token {
+            CallAuth::Bearer(token.authorization())
+        } else {
+            return Err(EgError::Token("missing".into()));
+        };
         let agent = ureq::AgentBuilder::new()
             .timeout(timeout)
             .timeout_connect(timeout)
@@ -212,7 +240,7 @@ impl Session {
         Ok(Self {
             agent,
             endpoint: endpoint.to_string(),
-            authorization: token.authorization(),
+            auth,
             session_id: None,
             protocol: PROTOCOL.to_string(),
             next_id: 1,
@@ -335,8 +363,29 @@ impl Session {
                 "User-Agent",
                 concat!("cerveau-client/", env!("CARGO_PKG_VERSION")),
             )
-            .set("Connection", "close")
-            .set("Authorization", &self.authorization);
+            .set("Connection", "close");
+        match &self.auth {
+            CallAuth::Bearer(authorization) => {
+                request = request.set("Authorization", authorization);
+            }
+            CallAuth::Sign(key) => {
+                let authority = crate::mcp_sig::authority_of(&self.endpoint)?;
+                let path = path_of(&self.endpoint);
+                let signed = key.sign(&crate::mcp_sig::SignRequest {
+                    method: "POST",
+                    authority: &authority,
+                    path: &path,
+                    content_type: "application/json",
+                    body: body.as_bytes(),
+                    session_id: self.session_id.as_deref(),
+                    created: crate::mcp_sig::unix_now(),
+                })?;
+                request = request
+                    .set("Content-Digest", &signed.content_digest)
+                    .set("Signature-Input", &signed.signature_input)
+                    .set("Signature", &signed.signature);
+            }
+        }
         if let Some(session) = &self.session_id {
             request = request.set("Mcp-Session-Id", session);
         }
@@ -606,7 +655,8 @@ mod tests {
         let token = TokenFile::load(&path).unwrap();
         let report = context_turn(&TurnRequest {
             endpoint: &format!("http://127.0.0.1:{port}/mcp"),
-            token: &token,
+            token: Some(&token),
+            signing: None,
             goal: "bonjour",
             ref_id: "ref-1",
             conversation_id: "default",
@@ -651,7 +701,8 @@ mod tests {
         let token = TokenFile::load(&path).unwrap();
         let err = context_turn(&TurnRequest {
             endpoint: &format!("http://127.0.0.1:{port}/mcp"),
-            token: &token,
+            token: Some(&token),
+            signing: None,
             goal: "bonjour",
             ref_id: "ref-1",
             conversation_id: "default",
@@ -663,6 +714,112 @@ mod tests {
         assert!(text.contains("401"), "{text}");
         assert!(!text.contains(secret), "{text}");
         let _ = server.join();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn signing_sends_no_authorization() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut tmp).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let text = String::from_utf8_lossy(&buf);
+                        let header_len = text.find("\r\n\r\n").unwrap() + 4;
+                        let len = text
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if buf.len() >= header_len + len {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                seen.push(text.clone());
+                let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
+                let method = body
+                    .split("\"method\":\"")
+                    .nth(1)
+                    .and_then(|s| s.split('"').next())
+                    .unwrap_or("");
+                let (status, extra, payload) = match method {
+                    "initialize" => (
+                        "200 OK",
+                        "Content-Type: application/json\r\nmcp-session-id: sess-1\r\n",
+                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{}}}",
+                    ),
+                    "notifications/initialized" => ("202 Accepted", "", ""),
+                    "tools/list" => (
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"channel_thread\"}]}}",
+                    ),
+                    "tools/call" => (
+                        "200 OK",
+                        "Content-Type: application/json\r\n",
+                        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"structuredContent\":{\"thread_id\":\"tid\"}}}",
+                    ),
+                    _ => ("500 ERR", "", ""),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+            seen
+        });
+        let root = std::env::temp_dir().join(format!("cerveau-mcp-sig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let public = crate::mcp_sig::generate(&root, "box-test").unwrap();
+        let key = crate::mcp_sig::SigningFile::load(&crate::mcp_sig::default_signing_path(&root))
+            .unwrap();
+        let report = context_turn(&TurnRequest {
+            endpoint: &format!("http://127.0.0.1:{port}/mcp"),
+            token: None,
+            signing: Some(&key),
+            goal: "bonjour",
+            ref_id: "ref-1",
+            conversation_id: "default",
+            reply: None,
+            timeout: Duration::from_secs(2),
+        })
+        .unwrap();
+        assert_eq!(report["outcome"], "context");
+        let seen = server.join().unwrap();
+        let init = seen.iter().find(|s| s.contains("initialize")).unwrap();
+        let call = seen.iter().find(|s| s.contains("tools/call")).unwrap();
+        for req in [init, call] {
+            let lower = req.to_ascii_lowercase();
+            assert!(!lower.contains("authorization"), "{req}");
+            assert!(lower.contains("content-digest:"));
+            assert!(lower.contains("signature-input:"));
+            assert!(lower.contains("signature:"));
+            assert!(req.contains("keyid=\"box-test\""));
+            assert!(req.contains("alg=\"ed25519\""));
+            assert!(!req.contains(&public));
+        }
+        assert!(call.contains("mcp-session-id"));
+        assert!(call.contains("\"mcp-session-id\""));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
