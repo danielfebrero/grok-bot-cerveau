@@ -888,6 +888,7 @@ mod tests {
         {
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
+                .truncate(true)
                 .write(true)
                 .mode(0o600)
                 .open(&token_path)

@@ -62,10 +62,10 @@ impl SigningFile {
     }
 
     pub fn sign(&self, request: &SignRequest<'_>) -> Result<SignedHeaders, EgError> {
-        if !safe(&request.method)
-            || !safe(&request.authority)
-            || !safe(&request.path)
-            || !safe(&request.content_type)
+        if !safe(request.method)
+            || !safe(request.authority)
+            || !safe(request.path)
+            || !safe(request.content_type)
         {
             return Err(EgError::Endpoint("invalid".into()));
         }
@@ -227,6 +227,7 @@ fn fresh_nonce() -> String {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signature_base(
     method: &str,
     authority: &str,
@@ -364,6 +365,7 @@ mod tests {
         {
             let mut file = fs::OpenOptions::new()
                 .create(true)
+                .truncate(true)
                 .write(true)
                 .mode(0o644)
                 .open(&path)
